@@ -5,6 +5,13 @@ import json
 import os
 
 import requests
+import yaml
+
+_ROUTING_PATH = os.path.join(os.path.dirname(__file__), "../../config/alert_routing.yaml")
+with open(_ROUTING_PATH) as _f:
+    _ROUTING = yaml.safe_load(_f)
+
+_SLACK_FMT = _ROUTING.get("notification_formatting", {}).get("slack", {})
 
 
 def send_slack(channel: str, message: str) -> None:
@@ -27,8 +34,8 @@ def send_slack(channel: str, message: str) -> None:
 
     payload = {
         "text": message,
-        "username": "Recon Bot",
-        "icon_emoji": ":bar_chart:",
+        "username": _SLACK_FMT.get("bot_name", "Recon Bot"),
+        "icon_emoji": _SLACK_FMT.get("icon_emoji", ":bar_chart:"),
     }
 
     response = requests.post(

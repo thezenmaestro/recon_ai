@@ -2,8 +2,16 @@
 from __future__ import annotations
 
 import json
+import os
 
 import requests
+import yaml
+
+_ROUTING_PATH = os.path.join(os.path.dirname(__file__), "../../config/alert_routing.yaml")
+with open(_ROUTING_PATH) as _f:
+    _ROUTING = yaml.safe_load(_f)
+
+_TEAMS_FMT = _ROUTING.get("notification_formatting", {}).get("teams", {})
 
 
 def send_teams(webhook_url: str, message: str) -> None:
@@ -22,11 +30,11 @@ def send_teams(webhook_url: str, message: str) -> None:
     payload = {
         "@type": "MessageCard",
         "@context": "http://schema.org/extensions",
-        "themeColor": "C0392B",     # Red header
+        "themeColor": _TEAMS_FMT.get("theme_color", "C0392B"),
         "summary": "Reconciliation Alert",
         "sections": [{
-            "activityTitle": "**Trade Reconciliation Alert**",
-            "activitySubtitle": "Automated nightly run",
+            "activityTitle": _TEAMS_FMT.get("card_title", "**Trade Reconciliation Alert**"),
+            "activitySubtitle": _TEAMS_FMT.get("card_subtitle", "Automated nightly run"),
             "text": message.replace("\n", "<br>"),
         }],
     }

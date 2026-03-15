@@ -16,31 +16,56 @@ _RULES_PATH = os.path.join(os.path.dirname(__file__), "../../config/business_rul
 with open(_RULES_PATH) as f:
     RULES = yaml.safe_load(f)
 
+_MAPPINGS_PATH = os.path.join(os.path.dirname(__file__), "../../config/field_mappings.yaml")
+with open(_MAPPINGS_PATH) as f:
+    MAPPINGS = yaml.safe_load(f)
+
 
 # =============================================================================
 # FX RATE LOOKUP
 # =============================================================================
 
-def _get_fx_rate(from_currency: str, to_currency: str = "USD") -> float:
+def _get_fx_rate(from_currency: str, to_currency: str = "USD", trade_date: str | None = None) -> float:
     """
-    Look up an FX rate to convert notional to USD.
-    Falls back to 1.0 (assumes USD) if lookup fails.
+    Look up an FX rate to convert notional to the base currency (default USD).
+    Config source: field_mappings.yaml → fx_rates
+    Fallback rate:  business_rules.yaml → position.fx_rate_fallback
 
-    TODO: Implement using your Snowflake FX rates table.
-          See field_mappings.yaml → fx_rates section.
+    TODO: Uncomment the Snowflake block below once MARKET_DATA_DB is available.
     """
+    fallback = float(RULES["position"].get("fx_rate_fallback", 1.0))
+
     if from_currency.upper() == to_currency.upper():
         return 1.0
 
-    # Placeholder — replace with actual Snowflake lookup
-    # Example:
-    # from src.data.snowflake_connector import query_to_df, results_conn
-    # sql = "SELECT MID_RATE FROM MARKET_DATA_DB.RATES.FX_RATES_EOD
-    #         WHERE FROM_CCY = %s AND TO_CCY = %s AND RATE_DATE = %s"
-    # df = query_to_df(conn, sql, (from_currency, to_currency, trade_date))
-    # return float(df['MID_RATE'].iloc[0]) if not df.empty else 1.0
+    fx_cfg = MAPPINGS.get("fx_rates", {})
 
-    return 1.0   # ← REPLACE with real lookup
+    if fx_cfg.get("use_snowflake_table", False):
+        # ── Snowflake FX lookup (uncomment when MARKET_DATA_DB is live) ─────
+        # db    = fx_cfg["snowflake"]["database"]
+        # schema = fx_cfg["snowflake"]["schema"]
+        # table  = fx_cfg["snowflake"]["table"]
+        # date_col   = fx_cfg["snowflake"]["date_column"]
+        # from_col   = fx_cfg["snowflake"]["from_currency_column"]
+        # to_col     = fx_cfg["snowflake"]["to_currency_column"]
+        # rate_col   = fx_cfg["snowflake"]["rate_column"]
+        # rate_date  = trade_date or str(date.today())
+        #
+        # sql = (
+        #     f"SELECT {rate_col} FROM {db}.{schema}.{table} "
+        #     f"WHERE {from_col} = %s AND {to_col} = %s AND {date_col} = %s"
+        # )
+        # try:
+        #     from src.data.snowflake_connector import query_to_df, results_conn
+        #     with results_conn() as conn:
+        #         df = query_to_df(conn, sql, (from_currency.upper(), to_currency.upper(), rate_date))
+        #     if not df.empty:
+        #         return float(df.iloc[0, 0])
+        # except Exception as exc:
+        #     print(f"[FX] Snowflake lookup failed ({from_currency}→{to_currency}): {exc}")
+        pass  # Remove when implementing the block above
+
+    return fallback
 
 
 def _get_last_price(isin: str, instrument_type: str) -> tuple[float | None, str]:
@@ -82,7 +107,7 @@ def calculate_position_impact(breaks_json: str, trade_date: str) -> str:
     for brk in breaks:
         instrument_type = brk.get("instrument_type", "UNKNOWN")
         isin = brk.get("isin")
-        currency = "USD"   # TODO: pull from break record if available
+        currency = brk.get("currency") or MAPPINGS.get("fx_rates", {}).get("base_currency", "USD")
         direction = brk.get("direction", "BUY")
 
         qty_gap = float(brk.get("quantity_gap", 0))
@@ -90,7 +115,7 @@ def calculate_position_impact(breaks_json: str, trade_date: str) -> str:
         notional_at_risk = float(brk.get("notional_at_risk_usd", 0))
 
         # FX conversion
-        fx_rate = _get_fx_rate(currency)
+        fx_rate = _get_fx_rate(currency, trade_date=trade_date)
         notional_usd = notional_at_risk * fx_rate
 
         # Position direction (gap represents exposure we DON'T have)
@@ -121,10 +146,10 @@ def calculate_position_impact(breaks_json: str, trade_date: str) -> str:
 
         required_metrics = risk_metrics_config.get(instrument_type, [])
         if "dv01" in required_metrics:
-            # Simplified DV01: approx $1 per bp per $1M notional for 10Y equiv
-            # TODO: replace with proper DV01 calculation using duration
-            dv01_impact = (notional_usd / 1_000_000) * 1.0
-            risk_notes = "DV01 is estimated. Replace with proper duration-adjusted calculation."
+            dv01_cfg = RULES["position"].get("dv01_config", {})
+            bps_per_million = float(dv01_cfg.get("basis_points_per_million", 1.0))
+            dv01_impact = (notional_usd / 1_000_000) * bps_per_million
+            risk_notes = dv01_cfg.get("estimation_note", "DV01 is estimated.")
 
         if "delta" in required_metrics:
             delta_impact = qty_gap   # For linear instruments, delta = qty

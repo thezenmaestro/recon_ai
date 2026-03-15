@@ -6,6 +6,14 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+import yaml
+
+_ROUTING_PATH = os.path.join(os.path.dirname(__file__), "../../config/alert_routing.yaml")
+with open(_ROUTING_PATH) as _f:
+    _ROUTING = yaml.safe_load(_f)
+
+_EMAIL_FMT = _ROUTING.get("notification_formatting", {}).get("email", {})
+
 
 def send_email(to: list[str], subject: str, body: str) -> None:
     """
@@ -42,15 +50,18 @@ def send_email(to: list[str], subject: str, body: str) -> None:
     msg.attach(MIMEText(body, "plain"))
 
     # HTML part — simple table format
+    header_color = _EMAIL_FMT.get("header_color", "#c0392b")
+    footer_text = _EMAIL_FMT.get(
+        "footer_text",
+        "This is an automated message from the Trade Reconciliation System.",
+    )
     html_body = f"""
     <html><body>
-    <h2 style="color:#c0392b;">Reconciliation Alert</h2>
+    <h2 style="color:{header_color};">Reconciliation Alert</h2>
     <pre style="font-family:monospace;background:#f8f8f8;padding:12px;border-radius:4px;">
 {body}
     </pre>
-    <p style="color:#888;font-size:11px;">
-        This is an automated message from the Trade Reconciliation System.
-    </p>
+    <p style="color:#888;font-size:11px;">{footer_text}</p>
     </body></html>
     """
     msg.attach(MIMEText(html_body, "html"))

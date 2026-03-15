@@ -131,3 +131,20 @@ alert_settings:
   max_breaks_in_summary: 10         # Cap list length in Slack/Teams messages
   digest_mode: true                 # Group all breaks into one message per run
                                     # (false = one alert per break)
+
+# ── Notification formatting ───────────────────────────────────────────────────
+# Controls the visual appearance and branding of alerts across all channels.
+# EDIT: Change bot names, colours, and footer copy to match your firm's style.
+notification_formatting:
+  slack:
+    bot_name: "Recon Bot"
+    icon_emoji: ":bar_chart:"
+
+  email:
+    header_color: "#c0392b"         # Hex colour for the email header banner
+    footer_text: "This is an automated message from the Trade Reconciliation System."
+
+  teams:
+    theme_color: "C0392B"           # Hex colour (no #) for the Teams card header
+    card_title: "**Trade Reconciliation Alert**"
+    card_subtitle: "Automated nightly run"

@@ -133,8 +133,25 @@ def match_transactions(trades_json: str, executions_json: str) -> str:
 
     # ── Pass 2: Composite key match ──────────────────────────────────────────
     # Key: (isin, counterparty_normalised, direction, settlement_date)
+    _norm_cfg = RULES["matching"].get("counterparty_normalization", {})
+
     def _normalise_counterparty(name: str) -> str:
-        return name.strip().upper().replace("  ", " ")
+        result = name
+        if _norm_cfg.get("strip_whitespace", True):
+            result = result.strip()
+        if _norm_cfg.get("collapse_spaces", True):
+            while "  " in result:
+                result = result.replace("  ", " ")
+        case = _norm_cfg.get("case", "upper")
+        if case == "upper":
+            result = result.upper()
+        elif case == "lower":
+            result = result.lower()
+        for suffix in _norm_cfg.get("strip_suffixes", []):
+            # Strip trailing legal suffixes (e.g. "GOLDMAN SACHS LLC" → "GOLDMAN SACHS")
+            if result.endswith(f" {suffix.upper()}"):
+                result = result[: -(len(suffix) + 1)].strip()
+        return result
 
     exec_by_composite = {}
     for ex in unmatched_executions:

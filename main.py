@@ -9,8 +9,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import date, timedelta
+
+import yaml
+
+_RULES_PATH = os.path.join(os.path.dirname(__file__), "config/business_rules.yaml")
+with open(_RULES_PATH) as _f:
+    _RULES = yaml.safe_load(_f)
+
+_EXIT_CODES: dict = _RULES.get("cli", {}).get("exit_codes", {"CRITICAL": 1})
 
 
 def main() -> None:
@@ -65,7 +74,7 @@ def main() -> None:
         for i, action in enumerate(summary.immediate_actions, 1):
             print(f"  {i}. {action}")
 
-    sys.exit(0 if summary.overall_status != "CRITICAL" else 1)
+    sys.exit(_EXIT_CODES.get(summary.overall_status, 0))
 
 
 if __name__ == "__main__":

@@ -59,6 +59,22 @@ matching:
       notional_pct: 0.002
       date_days: 1
 
+  # ── Counterparty normalisation rules ─────────────────────────────────────
+  # Applied before composite key matching to absorb common naming variations.
+  # EDIT: Add firm-specific legal entity suffix variants to strip_suffixes.
+  counterparty_normalization:
+    case: upper                  # Options: upper | lower | preserve
+    strip_whitespace: true       # Strip leading/trailing whitespace
+    collapse_spaces: true        # Replace multiple spaces with a single space
+    strip_suffixes:              # Legal suffixes stripped before matching
+      - "LLC"
+      - "INC"
+      - "PLC"
+      - "LTD"
+      - "LIMITED"
+      - "CORP"
+      - "CORPORATION"
+
 # =============================================================================
 # BREAK DEFINITIONS
 # =============================================================================
@@ -108,9 +124,30 @@ position:
   # Mark-to-market: if live prices unavailable, use last_known_price
   mtm_fallback: last_known_price
 
+  # FX conversion fallback (used when fx_rates lookup is unavailable)
+  fx_rate_fallback: 1.0            # 1.0 = treat all as USD
+
+  # Simplified DV01 estimation for bonds and derivatives.
+  # Replace with proper duration-adjusted model when live prices are available.
+  # Formula: notional_usd / 1,000,000 * basis_points_per_million
+  dv01_config:
+    basis_points_per_million: 1.0  # $1 per basis point per $1M notional
+    equivalent_duration_years: 10  # Assumed duration for simplified calc
+    estimation_note: "DV01 is estimated using simplified flat-duration model."
+
   # Risk metrics to compute per break (DV01 only relevant for BOND/DERIVATIVE)
   compute_risk_metrics:
     EQUITY: [delta, notional_usd]
     FX: [notional_usd, base_currency_exposure]
     BOND: [notional_usd, dv01]
     DERIVATIVE: [delta, notional_usd, dv01]
+
+# =============================================================================
+# CLI BEHAVIOUR
+# =============================================================================
+cli:
+  # Exit codes returned by main.py (useful for Airflow, CI, monitoring scripts)
+  exit_codes:
+    ALL_MATCHED: 0
+    BREAKS_FOUND: 0       # Breaks found but run succeeded — alert, don't fail
+    CRITICAL: 1           # Fatal errors (Snowflake failure, API error, etc.)
