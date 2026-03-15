@@ -1,0 +1,133 @@
+# =============================================================================
+# ALERT ROUTING — Tiered by Break Amount AND Asset Class
+# =============================================================================
+# WHERE TO PUT YOUR KNOWLEDGE:
+#   - Fill in real Slack channel IDs, email addresses, Teams webhook URLs.
+#   - Add rows to 'routing_matrix' for each desk/asset class combination.
+#   - Adjust notional thresholds to match your firm's escalation policy.
+# =============================================================================
+
+channels:
+  slack:
+    workspace: YOUR_WORKSPACE         # ← REPLACE
+    channels:
+      ops_general: "#recon-ops"       # ← REPLACE with your channel
+      equities_desk: "#recon-equities"
+      fx_desk: "#recon-fx"
+      bonds_desk: "#recon-bonds"
+      derivatives_desk: "#recon-derivatives"
+      risk_management: "#recon-risk"
+      management: "#recon-management"
+
+  email:
+    from_address: "recon-system@yourfirm.com"   # ← REPLACE
+    recipients:
+      ops_team:
+        - "ops-team@yourfirm.com"               # ← REPLACE
+      equities_desk_head:
+        - "equities-head@yourfirm.com"          # ← REPLACE
+      fx_desk_head:
+        - "fx-head@yourfirm.com"                # ← REPLACE
+      bonds_desk_head:
+        - "bonds-head@yourfirm.com"             # ← REPLACE
+      derivatives_desk_head:
+        - "derivatives-head@yourfirm.com"       # ← REPLACE
+      risk_management:
+        - "risk@yourfirm.com"                   # ← REPLACE
+      senior_management:
+        - "coo@yourfirm.com"                    # ← REPLACE
+
+  teams:
+    webhooks:
+      ops_channel: "https://yourfirm.webhook.office.com/..."    # ← REPLACE
+      risk_channel: "https://yourfirm.webhook.office.com/..."   # ← REPLACE
+      management_channel: "https://yourfirm.webhook.office.com/..." # ← REPLACE
+
+# =============================================================================
+# ROUTING MATRIX — by severity + asset class
+# =============================================================================
+# Each entry defines: who gets notified, via which channel, for what condition.
+#
+# Severity levels (from business_rules.yaml):
+#   LOW    : notional < $10K
+#   MEDIUM : $10K – $100K
+#   HIGH   : > $100K  OR  break_type = UNEXECUTED (always HIGH)
+# =============================================================================
+routing_matrix:
+  EQUITY:
+    LOW:
+      slack: [ops_general]
+      email: [ops_team]
+      teams: [ops_channel]
+    MEDIUM:
+      slack: [ops_general, equities_desk]
+      email: [ops_team, equities_desk_head]
+      teams: [ops_channel]
+    HIGH:
+      slack: [ops_general, equities_desk, risk_management]
+      email: [ops_team, equities_desk_head, risk_management]
+      teams: [ops_channel, risk_channel]
+
+  FX:
+    LOW:
+      slack: [ops_general]
+      email: [ops_team]
+      teams: [ops_channel]
+    MEDIUM:
+      slack: [ops_general, fx_desk]
+      email: [ops_team, fx_desk_head]
+      teams: [ops_channel]
+    HIGH:
+      slack: [ops_general, fx_desk, risk_management]
+      email: [ops_team, fx_desk_head, risk_management]
+      teams: [ops_channel, risk_channel]
+
+  BOND:
+    LOW:
+      slack: [ops_general]
+      email: [ops_team]
+      teams: [ops_channel]
+    MEDIUM:
+      slack: [ops_general, bonds_desk]
+      email: [ops_team, bonds_desk_head]
+      teams: [ops_channel]
+    HIGH:
+      slack: [ops_general, bonds_desk, risk_management, management]
+      email: [ops_team, bonds_desk_head, risk_management, senior_management]
+      teams: [ops_channel, risk_channel, management_channel]
+
+  DERIVATIVE:
+    LOW:
+      slack: [ops_general]
+      email: [ops_team]
+      teams: [ops_channel]
+    MEDIUM:
+      slack: [ops_general, derivatives_desk]
+      email: [ops_team, derivatives_desk_head]
+      teams: [ops_channel]
+    HIGH:
+      slack: [ops_general, derivatives_desk, risk_management, management]
+      email: [ops_team, derivatives_desk_head, risk_management, senior_management]
+      teams: [ops_channel, risk_channel, management_channel]
+
+  DEFAULT:              # Catch-all for unrecognised instrument types
+    LOW:
+      slack: [ops_general]
+      email: [ops_team]
+      teams: [ops_channel]
+    MEDIUM:
+      slack: [ops_general, risk_management]
+      email: [ops_team, risk_management]
+      teams: [ops_channel, risk_channel]
+    HIGH:
+      slack: [ops_general, risk_management, management]
+      email: [ops_team, risk_management, senior_management]
+      teams: [ops_channel, risk_channel, management_channel]
+
+# ── Alert content settings ────────────────────────────────────────────────────
+alert_settings:
+  include_ai_explanation: true      # Append Claude's narrative explanation
+  include_position_impact: true     # Append position/P&L numbers
+  max_breaks_in_summary: 10         # Cap list length in Slack/Teams messages
+  digest_mode: true                 # Group all breaks into one message per run
+                                    # (false = one alert per break)

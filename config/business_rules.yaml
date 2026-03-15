@@ -1,0 +1,116 @@
+# =============================================================================
+# BUSINESS RULES — Trade Reconciliation System
+# =============================================================================
+# WHERE TO PUT YOUR KNOWLEDGE:
+#   - Tolerances below are SUGGESTED DEFAULTS per asset class.
+#     Adjust them to match your desk's actual thresholds.
+#   - Add/remove instrument types as needed.
+#   - The 'escalation' section drives alert routing — tune thresholds to
+#     match your ops team's SLA and risk appetite.
+# =============================================================================
+
+matching:
+  # ── Primary key hierarchy ────────────────────────────────────────────────
+  # Claude will attempt matching in this order. If trade_id matches, it wins.
+  # If not, it falls back to composite attribute matching.
+  primary_keys:
+    - trade_id          # OMS trade ID vs broker trade reference ID
+    - isin              # Used as secondary discriminator
+
+  composite_keys:       # Used when primary key match fails
+    - isin
+    - counterparty
+    - direction         # BUY / SELL
+    - settlement_date
+
+  # ── Tolerances by asset class ────────────────────────────────────────────
+  # price_pct   : max % deviation between booked price and executed price
+  # qty_abs     : max absolute units difference (0 = must be exact)
+  # notional_pct: max % deviation on total notional
+  # date_days   : max settlement date difference in calendar days
+  tolerances:
+    EQUITY:
+      price_pct: 0.001        # 0.1% — e.g. $100.00 ±$0.10
+      qty_abs: 0              # Exact quantity match required
+      notional_pct: 0.002     # 0.2%
+      date_days: 0            # T+2 exact
+
+    FX:
+      price_pct: 0.0001       # 0.01% — 4 decimal place rate tolerance
+      qty_abs: 1000           # ±1000 currency units
+      notional_pct: 0.001     # 0.1%
+      date_days: 0            # T+2 exact (spot), T+0 (same-day)
+
+    BOND:
+      price_pct: 0.005        # 0.5% — accrued interest variations
+      qty_abs: 1000           # ±1000 face value units
+      notional_pct: 0.005     # 0.5%
+      date_days: 1            # Allow T+1 settlement flex
+
+    DERIVATIVE:
+      price_pct: 0.001        # 0.1%
+      qty_abs: 0              # Exact
+      notional_pct: 0.002     # 0.2%
+      date_days: 0            # Exact
+
+    DEFAULT:                  # Fallback if instrument_type not recognised
+      price_pct: 0.002
+      qty_abs: 0
+      notional_pct: 0.002
+      date_days: 1
+
+# =============================================================================
+# BREAK DEFINITIONS
+# =============================================================================
+# These define what constitutes a 'break' and its severity.
+# WHERE TO EDIT: Adjust thresholds to match your ops team's definitions.
+# =============================================================================
+breaks:
+  types:
+    UNEXECUTED:
+      description: "Trade booked in OMS with no matching execution confirm"
+      auto_severity: HIGH     # Always HIGH — trade didn't happen at all
+
+    QTY_MISMATCH:
+      description: "Executed quantity differs from booked quantity"
+      severity_by_notional: true   # Use escalation thresholds below
+
+    PRICE_MISMATCH:
+      description: "Executed price deviates beyond tolerance"
+      severity_by_notional: true
+
+    SETTLEMENT_DATE_MISMATCH:
+      description: "Confirmed settlement date differs from booked"
+      auto_severity: MEDIUM   # Funding/delivery impact but not a trade failure
+
+    PARTIAL_EXECUTION:
+      description: "Trade partially filled — some quantity executed, gap remains"
+      severity_by_notional: true
+
+  # ── Severity thresholds (notional USD equivalent) ────────────────────────
+  # EDIT THESE to match your risk team's break materiality thresholds
+  severity_thresholds:
+    LOW:
+      max_notional: 10000       # < $10K → ops team only
+    MEDIUM:
+      min_notional: 10000
+      max_notional: 100000      # $10K–$100K → ops + desk head
+    HIGH:
+      min_notional: 100000      # > $100K → ops + desk head + risk
+
+# =============================================================================
+# POSITION & VALUATION IMPACT
+# =============================================================================
+position:
+  # Fields used to aggregate open position impact
+  group_by: [isin, counterparty, settlement_date]
+
+  # Mark-to-market: if live prices unavailable, use last_known_price
+  mtm_fallback: last_known_price
+
+  # Risk metrics to compute per break (DV01 only relevant for BOND/DERIVATIVE)
+  compute_risk_metrics:
+    EQUITY: [delta, notional_usd]
+    FX: [notional_usd, base_currency_exposure]
+    BOND: [notional_usd, dv01]
+    DERIVATIVE: [delta, notional_usd, dv01]

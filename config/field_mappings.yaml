@@ -1,0 +1,89 @@
+# =============================================================================
+# FIELD MAPPINGS — Source A (OMS/Trades) vs Source B (Broker Executions)
+# =============================================================================
+# WHERE TO PUT YOUR KNOWLEDGE:
+#   Replace the placeholder table/column names below with your ACTUAL
+#   Snowflake database, schema, and column names.
+#   This is the single source of truth for how your two systems speak
+#   to each other.
+# =============================================================================
+
+# ── SOURCE A: OMS / Trade Booking System ─────────────────────────────────────
+trades:
+  snowflake:
+    database: TRADES_DB           # ← REPLACE with your actual DB name
+    schema: OMS                   # ← REPLACE with your actual schema
+    table: BOOKED_TRADES          # ← REPLACE with your actual table name
+
+  columns:
+    trade_id: TRADE_ID            # Unique trade identifier from OMS
+    isin: ISIN                    # Security ISIN
+    ticker: TICKER                # Bloomberg/Reuters ticker
+    instrument_type: INSTRUMENT_TYPE   # EQUITY | FX | BOND | DERIVATIVE
+    counterparty: COUNTERPARTY    # Counterparty legal entity name
+    direction: DIRECTION          # BUY or SELL
+    quantity: QUANTITY            # Number of units / notional face
+    price: PRICE                  # Booked price per unit
+    notional: NOTIONAL            # quantity * price
+    currency: CURRENCY            # ISO 4217 currency code
+    trade_date: TRADE_DATE        # Date trade was booked (YYYY-MM-DD)
+    settlement_date: SETTLEMENT_DATE  # Expected settlement date
+    status: STATUS                # BOOKED | CANCELLED | AMENDED
+
+  filters:
+    # Only pull trades in these statuses — adjust as needed
+    active_statuses: ["BOOKED", "AMENDED"]
+
+# ── SOURCE B: Broker Execution Confirmations ──────────────────────────────────
+executions:
+  snowflake:
+    database: EXECUTIONS_DB       # ← REPLACE with your actual DB name
+    schema: CONFIRMS              # ← REPLACE with your actual schema
+    table: EXECUTED_TRANSACTIONS  # ← REPLACE with your actual table name
+
+  columns:
+    execution_id: EXECUTION_ID         # Broker's unique execution reference
+    trade_ref_id: TRADE_REF_ID         # OMS trade ID echoed back (may be null)
+    isin: ISIN
+    ticker: TICKER
+    instrument_type: INSTRUMENT_TYPE
+    counterparty: COUNTERPARTY
+    direction: DIRECTION               # BUY or SELL
+    executed_quantity: EXECUTED_QTY    # Actual filled quantity
+    executed_price: EXECUTED_PRICE     # Actual fill price
+    executed_notional: EXECUTED_NOTIONAL
+    currency: CURRENCY
+    execution_date: EXECUTION_DATE
+    settlement_date: SETTLEMENT_DATE
+    status: EXEC_STATUS                # FILLED | PARTIAL | CANCELLED
+
+  filters:
+    active_statuses: ["FILLED", "PARTIAL"]
+
+# ── OUTPUT: Reconciliation Results ────────────────────────────────────────────
+results:
+  snowflake:
+    database: RECON_DB            # ← REPLACE with your results DB name
+    schema: RESULTS               # ← REPLACE with your results schema
+
+  tables:
+    recon_runs: RECON_RUNS                # One row per nightly run
+    matched_trades: MATCHED_TRADES        # Confirmed matched pairs
+    breaks: BREAKS                        # All break records
+    position_impact: POSITION_IMPACT      # Forward position/P&L impact
+    audit_log: RECON_AUDIT_LOG            # Full audit trail
+
+# ── CURRENCY / FX RATES ───────────────────────────────────────────────────────
+fx_rates:
+  # If your Snowflake has a rates table, point to it here
+  # If not, set use_api: true and configure the provider
+  use_snowflake_table: true
+  snowflake:
+    database: MARKET_DATA_DB      # ← REPLACE or set use_snowflake_table: false
+    schema: RATES
+    table: FX_RATES_EOD
+    date_column: RATE_DATE
+    from_currency_column: FROM_CCY
+    to_currency_column: TO_CCY
+    rate_column: MID_RATE
+  base_currency: USD
