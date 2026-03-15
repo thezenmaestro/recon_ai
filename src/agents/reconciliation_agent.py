@@ -14,6 +14,9 @@ from datetime import datetime, date
 
 import anthropic
 from anthropic import beta_tool
+from observability.tracker import TrackedAnthropic
+from observability.models import RunEvent
+from observability.sink import get_sink
 
 from src.agents.prompts import build_task_prompt, load_system_prompt
 from src.schemas.recon_output import ReconSummary
@@ -169,7 +172,11 @@ def run_reconciliation(
     if run_id is None:
         run_id = f"RECON-{trade_date}-{uuid.uuid4().hex[:8].upper()}"
 
-    client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
+    client = TrackedAnthropic(       # drop-in replacement — logs all API usage to Snowflake
+        run_id=run_id,
+        trade_date=trade_date,
+        triggered_by=triggered_by,
+    )
 
     # ── Register this run in Snowflake ───────────────────────────────────────
     write_recon_run({
@@ -181,6 +188,19 @@ def run_reconciliation(
     })
 
     print(f"[{run_id}] Starting reconciliation for trade date {trade_date}...")
+
+    sink = get_sink()
+    run_start = datetime.utcnow()
+
+    # Log RUN STARTED event
+    sink.log_run_event(RunEvent(
+        run_id=run_id,
+        trade_date=trade_date,
+        event_type="STARTED",
+        triggered_by=triggered_by,
+        status="RUNNING",
+        occurred_at=run_start,
+    ))
 
     try:
         # ── Run the agentic loop ─────────────────────────────────────────────
@@ -208,14 +228,40 @@ def run_reconciliation(
         summary = _extract_summary(final_message, run_id, trade_date)
 
         # ── Mark run complete ────────────────────────────────────────────────
+        duration = (datetime.utcnow() - run_start).total_seconds()
         finalise_recon_run(run_id, "COMPLETED")
+
+        sink.log_run_event(RunEvent(
+            run_id=run_id,
+            trade_date=trade_date,
+            event_type="COMPLETED",
+            triggered_by=triggered_by,
+            status="COMPLETED",
+            total_trades=summary.total_breaks,       # populate from summary when available
+            break_count=summary.total_breaks,
+            high_severity_count=summary.high_severity_count,
+            total_notional_at_risk_usd=summary.total_notional_at_risk_usd,
+            duration_seconds=round(duration, 2),
+        ))
+
         print(f"[{run_id}] Reconciliation complete. Status: {summary.overall_status}")
         return summary
 
     except Exception as e:
         error_msg = str(e)
+        duration = (datetime.utcnow() - run_start).total_seconds()
         print(f"[{run_id}] Reconciliation FAILED: {error_msg}")
         finalise_recon_run(run_id, "FAILED", error_message=error_msg)
+
+        sink.log_run_event(RunEvent(
+            run_id=run_id,
+            trade_date=trade_date,
+            event_type="FAILED",
+            triggered_by=triggered_by,
+            status="FAILED",
+            error_message=error_msg,
+            duration_seconds=round(duration, 2),
+        ))
         raise
 
 
