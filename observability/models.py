@@ -105,7 +105,23 @@ class RunEvent(BaseModel):
 
 
 # =============================================================================
-# 4. USER_ACTIVITY — who did what, when, and from where
+# 4. NOTIFICATION_DELIVERIES — outcome of every alert dispatch attempt
+# =============================================================================
+class NotificationDeliveryEvent(BaseModel):
+    delivery_id:    str      = Field(default_factory=lambda: str(uuid.uuid4()))
+    run_id:         Optional[str] = None
+    trade_date:     Optional[str] = None       # YYYY-MM-DD
+    channel_type:   str                        # slack | email | teams
+    channel_name:   str                        # channel, email group, or teams alias
+    break_count:    int      = 0               # number of breaks included in message
+    status:         str      = "SUCCESS"       # SUCCESS | FAILURE | SKIPPED
+    attempts:       int      = 1               # total attempts made (incl. retries)
+    error_message:  Optional[str] = None
+    sent_at:        datetime = Field(default_factory=datetime.utcnow)
+
+
+# =============================================================================
+# 5. USER_ACTIVITY — who did what, when, and from where
 # =============================================================================
 class UserActivityEvent(BaseModel):
     activity_id:  str      = Field(default_factory=lambda: str(uuid.uuid4()))

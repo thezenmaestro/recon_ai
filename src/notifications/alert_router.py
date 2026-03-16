@@ -5,6 +5,7 @@ Reads routing rules from config/alert_routing.yaml.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Any
 
@@ -13,6 +14,8 @@ import yaml
 from src.notifications.email_notifier import send_email
 from src.notifications.slack_notifier import send_slack
 from src.notifications.teams_notifier import send_teams
+
+logger = logging.getLogger(__name__)
 
 _ROUTING_PATH = os.path.join(os.path.dirname(__file__), "../../config/alert_routing.yaml")
 with open(_ROUTING_PATH) as f:
@@ -71,7 +74,9 @@ def route_alerts(breaks_json: str, run_id: str, trade_date: str) -> str:
 
             message = _build_digest_message(top_breaks, run_id, trade_date,
                                             include_ai, include_impact)
-            _dispatch(channel_type, channel_name, message, trade_date)
+            status, error_msg = _dispatch(channel_type, channel_name, message, trade_date)
+            _record_delivery(run_id, trade_date, channel_type, channel_name,
+                             len(channel_breaks), status, error_msg)
             dispatched.append({"channel_type": channel_type, "channel": channel_name,
                                 "break_count": len(channel_breaks)})
     else:
@@ -84,7 +89,9 @@ def route_alerts(breaks_json: str, run_id: str, trade_date: str) -> str:
                                                   include_ai, include_impact)
             for channel_key in _all_channel_keys(routing):
                 channel_type, channel_name = channel_key.split(":", 1)
-                _dispatch(channel_type, channel_name, message, trade_date)
+                status, error_msg = _dispatch(channel_type, channel_name, message, trade_date)
+                _record_delivery(run_id, trade_date, channel_type, channel_name,
+                                 1, status, error_msg)
                 dispatched.append({"channel_type": channel_type, "channel": channel_name,
                                     "break_id": brk.get("break_id")})
 
@@ -120,26 +127,66 @@ def _all_channel_keys(routing: dict) -> list[str]:
     return keys
 
 
-def _dispatch(channel_type: str, channel_name: str, message: str, trade_date: str) -> None:
+def _dispatch(channel_type: str, channel_name: str, message: str,
+              trade_date: str) -> tuple[str, str | None]:
+    """
+    Send a notification. Returns (status, error_message) where
+    status is 'SUCCESS', 'FAILURE', or 'SKIPPED'.
+    """
     channels_cfg = ROUTING.get("channels", {})
 
-    if channel_type == "slack":
-        send_slack(channel=channel_name, message=message)
+    try:
+        if channel_type == "slack":
+            send_slack(channel=channel_name, message=message)
+            return "SUCCESS", None
 
-    elif channel_type == "email":
-        recipients_map = channels_cfg["email"]["recipients"]
-        recipients = recipients_map.get(channel_name, [])
-        if recipients:
+        elif channel_type == "email":
+            recipients_map = channels_cfg["email"]["recipients"]
+            recipients = recipients_map.get(channel_name, [])
+            if not recipients:
+                logger.warning("No recipients configured for email group %s — skipping", channel_name)
+                return "SKIPPED", None
             send_email(
                 to=recipients,
                 subject=f"[RECON ALERT] Trade Date {trade_date} — Breaks Detected",
                 body=message,
             )
+            return "SUCCESS", None
 
-    elif channel_type == "teams":
-        webhook = channels_cfg["teams"]["webhooks"].get(channel_name, "")
-        if webhook:
+        elif channel_type == "teams":
+            webhook = channels_cfg["teams"]["webhooks"].get(channel_name, "")
+            if not webhook:
+                logger.warning("No webhook configured for Teams channel %s — skipping", channel_name)
+                return "SKIPPED", None
             send_teams(webhook_url=webhook, message=message)
+            return "SUCCESS", None
+
+    except Exception as exc:
+        logger.error("Notification dispatch failed for %s:%s — %s", channel_type, channel_name, exc)
+        return "FAILURE", str(exc)
+
+    return "SKIPPED", None
+
+
+def _record_delivery(run_id: str, trade_date: str, channel_type: str, channel_name: str,
+                     break_count: int, status: str, error_message: str | None) -> None:
+    """Fire-and-forget write to OBSERVABILITY.NOTIFICATION_DELIVERIES."""
+    try:
+        from observability.models import NotificationDeliveryEvent
+        from observability.sink import get_sink
+        event = NotificationDeliveryEvent(
+            run_id=run_id,
+            trade_date=trade_date,
+            channel_type=channel_type,
+            channel_name=channel_name,
+            break_count=break_count,
+            status=status,
+            error_message=error_message,
+        )
+        get_sink().log_notification(event)
+    except Exception as exc:
+        # Never let observability writes block or crash alert routing
+        logger.warning("Failed to record notification delivery to OBSERVABILITY: %s", exc)
 
 
 def _build_digest_message(breaks: list[dict], run_id: str, trade_date: str,

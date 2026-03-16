@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 from observability.models import (
     AIAPICallEvent,
+    NotificationDeliveryEvent,
     RunEvent,
     ToolCallEvent,
     UserActivityEvent,
@@ -96,7 +97,21 @@ CREATE TABLE IF NOT EXISTS OBSERVABILITY.RUN_EVENTS (
     OCCURRED_AT                 TIMESTAMP_NTZ
 );
 
--- ── 4. User Activity ─────────────────────────────────────────────────────────
+-- ── 4. Notification Deliveries ───────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS OBSERVABILITY.NOTIFICATION_DELIVERIES (
+    DELIVERY_ID     VARCHAR(64)     NOT NULL PRIMARY KEY,
+    RUN_ID          VARCHAR(64),
+    TRADE_DATE      DATE,
+    CHANNEL_TYPE    VARCHAR(16),
+    CHANNEL_NAME    VARCHAR(256),
+    BREAK_COUNT     INTEGER,
+    STATUS          VARCHAR(16),
+    ATTEMPTS        INTEGER,
+    ERROR_MESSAGE   TEXT,
+    SENT_AT         TIMESTAMP_NTZ
+);
+
+-- ── 5. User Activity ─────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS OBSERVABILITY.USER_ACTIVITY (
     ACTIVITY_ID     VARCHAR(64)     NOT NULL PRIMARY KEY,
     USER_NAME       VARCHAR(256),
@@ -190,6 +205,22 @@ LEFT JOIN (
 ) cost ON re.RUN_ID = cost.RUN_ID
 WHERE re.EVENT_TYPE = 'COMPLETED';
 
+-- Notification delivery success/failure rates by channel
+CREATE OR REPLACE VIEW OBSERVABILITY.V_NOTIFICATION_DELIVERIES AS
+SELECT
+    TRADE_DATE,
+    CHANNEL_TYPE,
+    CHANNEL_NAME,
+    COUNT(*)                                AS total_dispatches,
+    COUNT_IF(STATUS = 'SUCCESS')            AS success_count,
+    COUNT_IF(STATUS = 'FAILURE')            AS failure_count,
+    COUNT_IF(STATUS = 'SKIPPED')            AS skipped_count,
+    ROUND(COUNT_IF(STATUS = 'SUCCESS') * 100.0 / NULLIF(COUNT(*), 0), 2) AS success_rate_pct,
+    SUM(BREAK_COUNT)                        AS total_breaks_delivered,
+    AVG(ATTEMPTS)                           AS avg_attempts
+FROM OBSERVABILITY.NOTIFICATION_DELIVERIES
+GROUP BY 1, 2, 3;
+
 -- User activity log (human-readable)
 CREATE OR REPLACE VIEW OBSERVABILITY.V_USER_ACTIVITY AS
 SELECT
@@ -270,6 +301,11 @@ class ObservabilitySink:
         data = event.model_dump()
         data["occurred_at"] = data["occurred_at"].isoformat()
         self._insert("RUN_EVENTS", data)
+
+    def log_notification(self, event: NotificationDeliveryEvent) -> None:
+        data = event.model_dump()
+        data["sent_at"] = data["sent_at"].isoformat()
+        self._insert("NOTIFICATION_DELIVERIES", data)
 
     def log_user_activity(self, event: UserActivityEvent) -> None:
         data = event.model_dump()
