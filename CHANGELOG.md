@@ -1,7 +1,23 @@
 # Changelog
 
 > Auto-generated — last 10 commits on branch `main`.
-> Updated: 2026-03-16 19:54 UTC
+> Updated: 2026-03-16 19:55 UTC
+
+---
+
+## `20fe85a` — feat(changelog): add auto-updating CHANGELOG.md with post-commit hook
+
+| Field  | Value |
+|--------|-------|
+| Date   | 2026-03-16 |
+| Author | thezenmaestro |
+| Commit | `20fe85a2fbc1afad7b711114f22dd0460ad5bc93` |
+
+- scripts/update_changelog.sh regenerates CHANGELOG.md with the last 10
+  commits (hash, date, author, subject, full body) after every commit
+- .git/hooks/post-commit calls the script automatically on each commit
+- CHANGELOG.md seeded with current last 10 commits
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 
 ---
 
@@ -158,23 +174,6 @@ for key columns (trade_id/execution_id, ISIN, quantity, price) after
 each load, then writes a row to DATA_QUALITY_METRICS. Status is
 SUCCESS, EMPTY, or FAILURE. Includes DDL for the new table and
 V_DATA_QUALITY_TRENDS view showing null rates and latency over time.
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
-
----
-
-## `b7b7dc9` — Fix 7: Write notification delivery outcomes to OBSERVABILITY schema
-
-| Field  | Value |
-|--------|-------|
-| Date   | 2026-03-15 |
-| Author | thezenmaestro |
-| Commit | `b7b7dc9e56b0d0a42a84a1b5528bdd40da03ca1a` |
-
-Each alert dispatch (Slack, email, Teams) now records a row in
-NOTIFICATION_DELIVERIES with channel, break count, status (SUCCESS/
-FAILURE/SKIPPED), and error message. Includes DDL for the new table,
-V_NOTIFICATION_DELIVERIES view, and fire-and-forget _record_delivery()
-helper so observability writes never block or crash alert routing.
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 
 ---
