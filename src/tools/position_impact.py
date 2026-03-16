@@ -6,11 +6,14 @@ settlement/funding risk, and risk metrics (delta, DV01).
 from __future__ import annotations
 
 import json
+import logging
 import os
 import uuid
 from datetime import date
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 _RULES_PATH = os.path.join(os.path.dirname(__file__), "../../config/business_rules.yaml")
 with open(_RULES_PATH) as f:
@@ -65,6 +68,11 @@ def _get_fx_rate(from_currency: str, to_currency: str = "USD", trade_date: str |
         #     print(f"[FX] Snowflake lookup failed ({from_currency}→{to_currency}): {exc}")
         pass  # Remove when implementing the block above
 
+    logger.warning(
+        "FX rate lookup not implemented — using fallback rate %.4f for %s→%s. "
+        "Notional figures may be incorrect for non-USD positions.",
+        fallback, from_currency, to_currency,
+    )
     return fallback
 
 
@@ -74,8 +82,14 @@ def _get_last_price(isin: str, instrument_type: str) -> tuple[float | None, str]
     Returns (price, source_description).
 
     TODO: Implement using your market data source in Snowflake.
+    Until implemented, returns None which causes pnl_impact to be $0.00.
+    A WARNING is logged so operators know the figure is not a real calculation.
     """
-    # Placeholder — replace with actual lookup
+    logger.warning(
+        "_get_last_price is not implemented — pnl_impact will be $0.00 for "
+        "isin=%s instrument_type=%s. Implement this function to get accurate P&L impact.",
+        isin, instrument_type,
+    )
     return None, "NOT_AVAILABLE"
 
 
