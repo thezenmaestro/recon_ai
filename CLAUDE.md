@@ -3,6 +3,11 @@
 This file is automatically loaded by Claude Code at the start of every session.
 It gives the AI complete project context so work can resume immediately without re-explanation.
 
+> **Session start:** Read [CHANGELOG.md](CHANGELOG.md) before doing any work.
+> It contains the last 10 commits (auto-updated after every commit) and the full
+> narrative history of all reliability fixes. This keeps you current on recent changes
+> without needing to ask the user.
+
 ---
 
 ## What This Project Does

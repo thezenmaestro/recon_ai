@@ -266,7 +266,7 @@ No other code changes needed.
 |---|---|---|
 | [CLAUDE.md](CLAUDE.md) | AI (auto-loaded) | Full project context for AI sessions |
 | [README.md](README.md) | All | Setup, usage, configuration reference |
-| [docs/CHANGELOG.md](docs/CHANGELOG.md) | Engineers | All reliability fixes — motivation, what changed, files, verification |
+| [CHANGELOG.md](CHANGELOG.md) | Engineers / AI | Last 10 commits (auto-updated) + full reliability fix history |
 | [docs/RELEASE.md](docs/RELEASE.md) | Engineers | Dev-to-prod deployment, environment isolation, rollback |
 | [docs/CONFIG_GUIDE.md](docs/CONFIG_GUIDE.md) | Ops / Analysts | All config fields explained with examples and common tasks |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Engineers | System design, data flow, design decisions |
