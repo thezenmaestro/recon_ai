@@ -242,24 +242,6 @@ pytest tests/unit/
 
 ---
 
-## Adding New Instrument Types
-
-1. Add a tolerance block in `config/business_rules.yaml`:
-   ```yaml
-   matching:
-     tolerances:
-       CDS:
-         price_pct: 0.001
-         qty_abs: 0
-         date_days: 1
-   ```
-2. Add to `InstrumentType` enum in `src/data/models.py`
-3. Add risk metrics config in `config/business_rules.yaml` under `position.compute_risk_metrics`
-
-No other code changes needed.
-
----
-
 ## Documentation
 
 | Document | Audience | Contents |

@@ -12,30 +12,7 @@ It gives the AI complete project context so work can resume immediately without 
 
 ## What This Project Does
 
-**Trade reconciliation system** — AI-powered pipeline that runs every morning and produces reports by 08:00. It:
-1. Loads booked trades (OMS) and executed transactions (broker confirms) from separate Snowflake databases
-2. Matches them using a rule-based engine (exact key → composite key → unmatched)
-3. Classifies breaks (UNEXECUTED, QTY_MISMATCH, PRICE_MISMATCH, SETTLEMENT_DATE_MISMATCH)
-4. Has Claude Opus 4.6 explain each break and assess forward position/P&L/risk impact
-5. Writes all results back to Snowflake
-6. Routes tiered alerts to Slack, Email (SMTP), and Microsoft Teams
-7. Runs daily via Apache Airflow (06:00 ET / America/Toronto — reports ready by 08:00 ET, skips Canadian federal + Ontario holidays)
-
-**Observability layer** captures all Claude API usage, tool calls, run history, and user activity
-into a separate Snowflake schema (`OBSERVABILITY`) for dashboards in Sigma / Basedash.
-
----
-
-## Stack
-
-| Layer | Technology |
-|---|---|
-| AI | Claude Opus 4.6 via `anthropic` Python SDK — single targeted call per run |
-| Data | Snowflake (3 separate databases: TRADES_DB, EXECUTIONS_DB, RECON_DB) |
-| Orchestration | Apache Airflow (DAG: `trade_reconciliation_nightly`) |
-| Language | Python 3.11+, Pydantic v2 |
-| Notifications | Slack webhook, SMTP email, Microsoft Teams webhook |
-| Dashboards | Sigma / Basedash connected to RECON_DB.OBSERVABILITY views |
+AI-powered nightly trade reconciliation pipeline (OMS vs broker confirms → break classification → Claude enrichment → Snowflake → tiered alerts). See [README.md](README.md) for full overview and setup.
 
 ---
 
@@ -179,48 +156,7 @@ RECON_USER                     # optional: username for user activity logging (m
 
 ## Snowflake Schema Map
 
-```
-TRADES_DB
-  └── OMS.BOOKED_TRADES                   ← Source A (read only)
-
-EXECUTIONS_DB
-  └── CONFIRMS.EXECUTED_TRANSACTIONS      ← Source B (read only)
-
-RECON_DB
-  ├── RESULTS.RECON_RUNS                  ← Run metadata
-  ├── RESULTS.MATCHED_TRADES              ← Confirmed matched pairs
-  ├── RESULTS.BREAKS                      ← All break records + AI explanations
-  ├── RESULTS.POSITION_IMPACT             ← Forward P&L, cash, risk impact
-  └── OBSERVABILITY.AI_API_CALLS             ← Claude API usage per call
-      OBSERVABILITY.TOOL_CALLS               ← Tool invocations
-      OBSERVABILITY.RUN_EVENTS               ← Run lifecycle events
-      OBSERVABILITY.USER_ACTIVITY            ← Who did what
-      OBSERVABILITY.DATA_QUALITY_METRICS     ← Data load health (nulls, counts, latency)
-      OBSERVABILITY.NOTIFICATION_DELIVERIES  ← Alert dispatch outcomes per channel
-      OBSERVABILITY.V_DAILY_AI_COST          ← View: daily cost by model
-      OBSERVABILITY.V_MONTHLY_AI_COST        ← View: monthly cost rollup
-      OBSERVABILITY.V_TOOL_PERFORMANCE       ← View: tool stats
-      OBSERVABILITY.V_RUN_HISTORY            ← View: run history + cost
-      OBSERVABILITY.V_USER_ACTIVITY          ← View: audit trail
-      OBSERVABILITY.V_DATA_QUALITY_TRENDS    ← View: 7-day data load health
-      OBSERVABILITY.V_NOTIFICATION_DELIVERIES← View: alert delivery outcomes
-```
-
----
-
-## How to Run
-
-```bash
-# First-time setup
-python main.py --setup-tables          # Creates RECON_DB result tables
-python observability/setup.py          # Creates OBSERVABILITY tables + views
-
-# Run reconciliation for a date
-python main.py --date 2024-01-15
-
-# Airflow (automatic)
-# DAG: trade_reconciliation_nightly — daily 06:00 ET / America/Toronto (reports by 08:00 ET)
-```
+See [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md) for full table and field reference.
 
 ---
 
