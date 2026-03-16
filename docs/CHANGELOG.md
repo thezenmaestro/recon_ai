@@ -329,6 +329,47 @@ safety net.
 `tests/unit/test_matcher.py`, `tests/unit/test_break_classifier.py`,
 `tests/unit/test_break_enricher.py`, `tests/unit/test_alert_router.py`
 
+---
+
+## Fix 10 — Unit Tests for `position_impact.py`
+
+**Problem:** `calculate_position_impact()` had no test coverage despite containing
+the core BUY/SELL cash direction logic, DV01 estimation, delta computation, and
+portfolio aggregation — all of which are pure Python and fully testable without
+Snowflake or a Claude API key.
+
+**What changed:**
+- `tests/unit/test_position_impact.py` (new, 42 tests):
+  - `TestGetFxRate` — same-currency short-circuit returns 1.0 (case-insensitive),
+    different-currency falls back to `fx_rate_fallback = 1.0` from
+    `business_rules.yaml`, logs WARNING with currency pair in message.
+  - `TestBuyDirection` — cash impact positive (liquidity retained), securities
+    impact negative (not received), `net_position_direction = "LONG"`, numeric
+    values equal to notional and qty_gap respectively.
+  - `TestSellDirection` — cash impact negative (revenue not received), securities
+    positive (not delivered), `net_position_direction = "SHORT"`.
+  - `TestPnlImpact` — P&L is $0 when `_get_last_price` returns None (the current
+    stub behaviour); correct `(price_move × qty × direction_sign)` formula when
+    mocked last price is provided; `last_known_price` and `price_source` captured
+    in output.
+  - `TestDv01Metrics` — BOND and DERIVATIVE get DV01 (`$1/bps/$1M` per config),
+    EQUITY and FX do not; DV01 scales linearly with notional; `risk_metric_notes`
+    present for bond.
+  - `TestDeltaMetrics` — EQUITY and DERIVATIVE get `delta_impact = qty_gap`, BOND
+    and FX do not.
+  - `TestPortfolioSummary` — empty list produces zero summary; break count matches
+    input length; cash and securities impacts sum correctly across multiple breaks;
+    opposing BUY/SELL cash impacts net to zero.
+  - `TestOutputStructure` — all 17 required output keys present; `impact_id` is
+    unique (UUID) per break; `break_id`, `as_of_date`, `net_position_change`
+    preserved exactly from input; round-trips to valid JSON.
+  - `TestUnknownInstrumentType` — produces no risk metrics but still computes cash
+    and securities impacts.
+
+**Total after this fix: 126 unit tests. Runtime: ~0.9 s.**
+
+**Files added:** `tests/unit/test_position_impact.py`
+
 **To run:**
 ```bash
 pytest tests/unit/

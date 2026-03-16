@@ -109,11 +109,12 @@ recon_ai/
 │
 ├── tests/
 │   ├── conftest.py                  # sys.path setup for test imports
-│   ├── unit/                        # 84 tests — no Snowflake, no AI key required
+│   ├── unit/                        # 126 tests — no Snowflake, no AI key required
 │   │   ├── test_matcher.py          # 20 tests: tolerances, pass-1, pass-2, composite key
 │   │   ├── test_break_classifier.py # 17 tests: severity, orphan, summary structure
 │   │   ├── test_break_enricher.py   # 35 tests: all 7 break types, explain/recommend
-│   │   └── test_alert_router.py     # 12 tests: dispatch, SKIPPED, FAILURE, observability safety
+│   │   ├── test_alert_router.py     # 12 tests: dispatch, SKIPPED, FAILURE, observability safety
+│   │   └── test_position_impact.py  # 42 tests: BUY/SELL direction, P&L, DV01, delta, portfolio
 │   └── integration/                 # Full pipeline tests
 │
 ├── pytest.ini                       # Test discovery config (testpaths = tests)

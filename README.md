@@ -223,14 +223,14 @@ See [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md) for full table and field 
 
 ## Testing
 
-Unit tests cover the matching engine, break classifier, break enricher, and alert router.
+Unit tests cover the matching engine, break classifier, break enricher, alert router, and position impact calculator.
 They run without Snowflake connections, without a Claude API key, and complete in under 1 second.
 
 ```bash
 pytest tests/unit/
 ```
 
-84 tests across 4 modules:
+126 tests across 5 modules:
 
 | Module | Tests | Covers |
 |---|---|---|
@@ -238,6 +238,7 @@ pytest tests/unit/
 | `test_break_classifier.py` | 17 | Severity scoring, UNEXECUTED/orphan detection, summary structure |
 | `test_break_enricher.py` | 35 | All 7 break types, explanation content, action recommendations, `needs_human_review` logic |
 | `test_alert_router.py` | 12 | Channel dispatch, SKIPPED/FAILURE outcomes, observability fire-and-forget safety |
+| `test_position_impact.py` | 42 | BUY/SELL cash direction, P&L with mocked prices, DV01/delta per asset class, portfolio aggregation |
 
 ---
 
