@@ -1,0 +1,145 @@
+version: 2
+
+sources:
+  - name: results
+    database: "{{ var('results_database') }}"
+    schema: "{{ var('results_schema') }}"
+    description: "Reconciliation output tables written by the recon pipeline."
+    tables:
+      - name: recon_runs
+        description: "One row per reconciliation run. Authoritative run registry."
+        columns:
+          - name: run_id
+            description: "Unique run ID. Format: RECON-YYYY-MM-DD-XXXXXXXX"
+            tests: [unique, not_null]
+          - name: trade_date
+            tests: [not_null]
+          - name: status
+            tests:
+              - accepted_values:
+                  values: ['RUNNING', 'COMPLETED', 'FAILED']
+
+      - name: breaks
+        description: "One row per break. Primary table for ops investigation."
+        columns:
+          - name: break_id
+            tests: [unique, not_null]
+          - name: run_id
+            tests: [not_null]
+          - name: severity
+            tests:
+              - accepted_values:
+                  values: ['LOW', 'MEDIUM', 'HIGH']
+          - name: break_type
+            tests:
+              - accepted_values:
+                  values: ['UNEXECUTED', 'QTY_MISMATCH', 'PRICE_MISMATCH',
+                           'SETTLEMENT_DATE_MISMATCH', 'PARTIAL_EXECUTION',
+                           'ORPHAN_EXECUTION', 'NEEDS_REVIEW']
+
+      - name: matched_trades
+        description: "One row per successfully matched trade/execution pair."
+        columns:
+          - name: match_id
+            tests: [unique, not_null]
+          - name: run_id
+            tests: [not_null]
+
+      - name: position_impact
+        description: "Position and valuation impact per break."
+        columns:
+          - name: impact_id
+            tests: [unique, not_null]
+          - name: break_id
+            tests: [not_null]
+
+  - name: observability
+    database: "{{ var('observability_database') }}"
+    schema: "{{ var('observability_schema') }}"
+    description: "AI usage tracking and run lifecycle events."
+    tables:
+      - name: ai_api_calls
+        description: "One row per Claude API call — cost and token tracking."
+        columns:
+          - name: call_id
+            tests: [unique, not_null]
+
+      - name: tool_calls
+        description: "One row per tool invocation logged by TrackedAnthropic."
+        columns:
+          - name: tool_call_id
+            tests: [unique, not_null]
+
+      - name: run_events
+        description: "Run lifecycle events: STARTED, COMPLETED, FAILED."
+        columns:
+          - name: event_id
+            tests: [unique, not_null]
+          - name: run_id
+            tests: [not_null]
+          - name: event_type
+            tests:
+              - accepted_values:
+                  values: ['STARTED', 'COMPLETED', 'FAILED']
+
+      - name: user_activity
+        description: "Audit trail of human-initiated actions."
+        columns:
+          - name: activity_id
+            tests: [unique, not_null]
+
+
+models:
+  - name: stg_recon_runs
+    description: "Cleaned reconciliation run records with derived run metrics."
+    columns:
+      - name: run_id
+        tests: [unique, not_null]
+      - name: trade_date
+        tests: [not_null]
+      - name: status
+        tests: [not_null]
+
+  - name: stg_breaks
+    description: "Cleaned break records with enrichment source tracking."
+    columns:
+      - name: break_id
+        tests: [unique, not_null]
+      - name: run_id
+        tests: [not_null]
+
+  - name: stg_matched_trades
+    description: "Cleaned matched trade pairs."
+    columns:
+      - name: match_id
+        tests: [unique, not_null]
+
+  - name: stg_position_impact
+    description: "Cleaned position impact records."
+    columns:
+      - name: impact_id
+        tests: [unique, not_null]
+
+  - name: stg_ai_api_calls
+    description: "Cleaned AI API call records with cost metrics."
+    columns:
+      - name: call_id
+        tests: [unique, not_null]
+
+  - name: stg_tool_calls
+    description: "Cleaned tool call records."
+    columns:
+      - name: tool_call_id
+        tests: [unique, not_null]
+
+  - name: stg_run_events
+    description: "Cleaned run lifecycle events."
+    columns:
+      - name: event_id
+        tests: [unique, not_null]
+
+  - name: stg_user_activity
+    description: "Cleaned user activity audit log."
+    columns:
+      - name: activity_id
+        tests: [unique, not_null]

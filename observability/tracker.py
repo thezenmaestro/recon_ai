@@ -43,8 +43,11 @@ class _TrackedBetaMessages:
 
     def create(self, **kwargs) -> Any:
         """Wrap a direct beta.messages.create() call."""
+        call_purpose = kwargs.pop("_call_purpose", None)
         return self._tracker._tracked_create(
-            lambda: self._beta_messages.create(**kwargs), **kwargs
+            lambda: self._beta_messages.create(**kwargs),
+            call_purpose=call_purpose,
+            **kwargs,
         )
 
     def __getattr__(self, name: str) -> Any:
@@ -114,6 +117,7 @@ class TrackedAnthropic:
         message: Any,
         iteration: int = 1,
         latency_ms: int = 0,
+        call_purpose: str | None = None,
     ) -> None:
         """Extract usage from a BetaMessage and write to Snowflake."""
         try:
@@ -159,6 +163,7 @@ class TrackedAnthropic:
                 had_thinking=had_thinking,
                 tool_use_count=tool_use_count,
                 triggered_by=self._triggered_by,
+                call_purpose=call_purpose,
             )
             self._sink.log_api_call(event)
 
@@ -178,7 +183,7 @@ class TrackedAnthropic:
         except Exception as e:
             print(f"[Observability] WARNING: failed to capture message usage: {e}")
 
-    def _tracked_create(self, fn, **kwargs) -> Any:
+    def _tracked_create(self, fn, call_purpose: str | None = None, **kwargs) -> Any:
         """Time a create() call and capture usage from the response."""
         start = time.perf_counter()
         error_msg = None
@@ -192,7 +197,7 @@ class TrackedAnthropic:
         finally:
             latency_ms = int((time.perf_counter() - start) * 1000)
             if response is not None:
-                self._capture_message(response, latency_ms=latency_ms)
+                self._capture_message(response, latency_ms=latency_ms, call_purpose=call_purpose)
             elif error_msg:
                 event = AIAPICallEvent(
                     run_id=self._run_id,
@@ -200,6 +205,7 @@ class TrackedAnthropic:
                     model=kwargs.get("model", "claude-opus-4-6"),
                     latency_ms=latency_ms,
                     triggered_by=self._triggered_by,
+                    call_purpose=call_purpose,
                     error=error_msg,
                 )
                 self._sink.log_api_call(event)
@@ -238,8 +244,11 @@ class _TrackedMessages:
         self._tracker = tracker
 
     def create(self, **kwargs) -> Any:
+        call_purpose = kwargs.pop("_call_purpose", None)
         return self._tracker._tracked_create(
-            lambda: self._messages.create(**kwargs), **kwargs
+            lambda: self._messages.create(**kwargs),
+            call_purpose=call_purpose,
+            **kwargs,
         )
 
     def __getattr__(self, name: str) -> Any:

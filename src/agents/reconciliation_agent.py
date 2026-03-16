@@ -180,6 +180,7 @@ def run_reconciliation(
                     brk["recommended_action"] = upd["recommended_action"]
                     brk["confidence"] = upd["confidence"]
                     brk["needs_human_review"] = upd["needs_human_review"]
+                    brk["enrichment_source"] = "CLAUDE_ENHANCED"
 
         breaks_data["breaks"] = all_breaks
         enriched_breaks_json = json.dumps(breaks_data)
@@ -278,6 +279,7 @@ def _enrich_with_claude(
                 "schema": _ENRICHMENT_SCHEMA,
             }
         },
+        _call_purpose="BREAK_ENRICHMENT",
     )
 
     for block in response.content:

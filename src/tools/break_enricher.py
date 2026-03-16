@@ -146,5 +146,6 @@ def enrich_breaks_locally(breaks_data: dict) -> dict:
         brk["recommended_action"] = _recommend(brk)
         brk["confidence"] = "HIGH"          # Template outputs are deterministic
         brk["needs_human_review"] = (brk.get("break_type") == "NEEDS_REVIEW")
+        brk["enrichment_source"] = "TEMPLATE_ONLY"
 
     return breaks_data

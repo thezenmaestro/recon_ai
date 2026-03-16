@@ -1,0 +1,74 @@
+version: 2
+
+models:
+  - name: fct_recon_runs
+    description: >
+      One row per completed reconciliation run, enriched with AI cost attribution,
+      match rate, SLA outcome, and break severity summary. Primary table for
+      executive dashboards and run health monitoring.
+    columns:
+      - name: run_id
+        description: "Unique run identifier."
+        tests: [unique, not_null]
+      - name: trade_date
+        tests: [not_null]
+      - name: status
+        tests:
+          - accepted_values:
+              values: ['COMPLETED', 'FAILED', 'RUNNING']
+      - name: sla_met
+        description: "True if the run completed before 08:00 ET."
+      - name: match_rate_pct
+        description: "Percentage of trades that matched (matched / total_trades × 100)."
+      - name: ai_cost_usd
+        description: "Total Claude API cost for this run in USD."
+
+  - name: fct_breaks
+    description: >
+      One row per break, joined with position impact data and enrichment metadata.
+      Primary table for ops investigation, break analysis, and alert dashboards.
+    columns:
+      - name: break_id
+        tests: [unique, not_null]
+      - name: run_id
+        tests: [not_null]
+      - name: severity
+        tests:
+          - accepted_values:
+              values: ['LOW', 'MEDIUM', 'HIGH']
+      - name: enrichment_source
+        description: "CLAUDE_ENHANCED for HIGH breaks enriched by Claude; TEMPLATE_ONLY for all others."
+        tests:
+          - accepted_values:
+              values: ['CLAUDE_ENHANCED', 'TEMPLATE_ONLY', 'UNKNOWN']
+
+  - name: fct_matched_trades
+    description: >
+      One row per matched trade pair, joined with run context.
+      Used for match rate analysis and settlement confirmation tracking.
+    columns:
+      - name: match_id
+        tests: [unique, not_null]
+
+  - name: fct_ai_usage
+    description: >
+      One row per day per run, summarising AI API usage. Designed for
+      cost monitoring dashboards and budget tracking.
+    columns:
+      - name: run_id
+        tests: [not_null]
+      - name: trade_date
+        tests: [not_null]
+
+  - name: fct_break_trends
+    description: >
+      Aggregated break patterns by counterparty, instrument type, and break type
+      over a trailing 90-day window. Powers the pattern detection dashboard and
+      supplements Claude's cross-break analysis with historical context.
+    columns:
+      - name: counterparty
+        tests: [not_null]
+      - name: instrument_type
+        tests: [not_null]
+      - name: break_type
+        tests: [not_null]

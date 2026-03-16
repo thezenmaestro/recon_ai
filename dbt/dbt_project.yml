@@ -1,0 +1,35 @@
+name: 'recon_ai'
+version: '1.0.0'
+config-version: 2
+
+profile: 'recon_ai'
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  recon_ai:
+    staging:
+      +materialized: view
+      +schema: dbt_staging
+    marts:
+      +materialized: table
+      +schema: dbt_marts
+
+vars:
+  # Database names — override via dbt run --vars or profiles.yml
+  results_database: "RECON_DB"
+  results_schema: "RESULTS"
+  observability_database: "RECON_DB"
+  observability_schema: "OBSERVABILITY"
+
+  # SLA deadline for daily recon runs (hour in ET, 24h)
+  sla_deadline_hour_et: 8

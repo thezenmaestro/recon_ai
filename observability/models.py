@@ -57,6 +57,7 @@ class AIAPICallEvent(BaseModel):
     had_thinking:     bool     = False
     tool_use_count:   int      = 0               # number of tool_use blocks returned
     triggered_by:     str      = "airflow"       # airflow | manual | event
+    call_purpose:     Optional[str] = None       # e.g. BREAK_ENRICHMENT — what this call was for
     called_at:        datetime = Field(default_factory=datetime.utcnow)
     error:            Optional[str] = None
 

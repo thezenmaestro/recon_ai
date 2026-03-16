@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS OBSERVABILITY.AI_API_CALLS (
     HAD_THINKING        BOOLEAN,
     TOOL_USE_COUNT      INTEGER,
     TRIGGERED_BY        VARCHAR(32),
+    CALL_PURPOSE        VARCHAR(64),
     CALLED_AT           TIMESTAMP_NTZ,
     ERROR               TEXT
 );
@@ -175,8 +176,15 @@ SELECT
     cost.total_tokens                       AS tokens_used,
     cost.api_call_count
 FROM OBSERVABILITY.RUN_EVENTS re
-LEFT JOIN OBSERVABILITY.V_DAILY_AI_COST cost
-    ON re.RUN_ID = cost.trade_date::VARCHAR   -- adjust join key if needed
+LEFT JOIN (
+    SELECT
+        RUN_ID,
+        SUM(COST_USD)       AS total_cost_usd,
+        SUM(TOTAL_TOKENS)   AS total_tokens,
+        COUNT(*)            AS api_call_count
+    FROM OBSERVABILITY.AI_API_CALLS
+    GROUP BY RUN_ID
+) cost ON re.RUN_ID = cost.RUN_ID
 WHERE re.EVENT_TYPE = 'COMPLETED';
 
 -- User activity log (human-readable)
