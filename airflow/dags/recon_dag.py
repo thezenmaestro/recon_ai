@@ -6,6 +6,7 @@ Schedule: Mon–Fri at 20:00 UTC (adjust to your market close + buffer)
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta
 
 from airflow import DAG
@@ -18,9 +19,9 @@ from airflow.utils.dates import days_ago
 # =============================================================================
 
 default_args = {
-    "owner": "recon-team",                  # ← REPLACE with your team
+    "owner": os.environ.get("AIRFLOW_DAG_OWNER", "recon-team"),
     "depends_on_past": False,
-    "email": ["ops-team@yourfirm.com"],     # ← REPLACE with your ops email
+    "email": [os.environ.get("AIRFLOW_FAILURE_EMAIL", "ops-team@yourfirm.com")],
     "email_on_failure": True,
     "email_on_retry": False,
     "retries": 1,

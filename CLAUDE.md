@@ -146,7 +146,9 @@ SNOWFLAKE_RESULTS_SCHEMA       # default: RESULTS
 SLACK_WEBHOOK_URL
 SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASSWORD / EMAIL_FROM
 RECON_AI_PATH                  # Airflow worker: absolute path to this project
-RECON_USER                     # optional: username for user activity logging
+AIRFLOW_DAG_OWNER              # Airflow: team name shown as DAG owner (default: recon-team)
+AIRFLOW_FAILURE_EMAIL          # Airflow: email notified on DAG task failure
+RECON_USER                     # optional: username for user activity logging (manual runs)
 ```
 
 ---
