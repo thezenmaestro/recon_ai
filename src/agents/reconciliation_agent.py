@@ -22,6 +22,7 @@ from observability.tracker import TrackedAnthropic
 from observability.models import RunEvent
 from observability.sink import get_sink
 
+from src.exceptions import EnrichmentError
 from src.agents.prompts import build_enrichment_prompt, load_system_prompt
 from src.schemas.recon_output import (
     BreakExplanation,
@@ -172,9 +173,16 @@ def run_reconciliation(
             "matched_count": matched_count,
             "by_severity": by_severity,
         }
-        claude_response = _enrich_with_claude(
-            client, high_breaks, all_breaks, match_stats, trade_date, run_id
-        )
+        try:
+            claude_response = _enrich_with_claude(
+                client, high_breaks, all_breaks, match_stats, trade_date, run_id
+            )
+        except EnrichmentError as exc:
+            logger.warning(
+                "[%s] Claude enrichment failed — falling back to template explanations: %s",
+                run_id, exc,
+            )
+            claude_response = None
 
         # Merge Claude's enhanced explanations back into the full breaks list
         if claude_response:
@@ -292,13 +300,10 @@ def _enrich_with_claude(
         if getattr(block, "type", None) == "text":
             try:
                 return json.loads(block.text)
-            except json.JSONDecodeError:
-                logger.warning(
-                    "[%s] Claude enrichment response was not valid JSON; "
-                    "using template explanations for all HIGH breaks",
-                    run_id,
-                )
-                return None
+            except json.JSONDecodeError as exc:
+                raise EnrichmentError(
+                    f"[{run_id}] Claude enrichment response was not valid JSON"
+                ) from exc
 
     return None
 

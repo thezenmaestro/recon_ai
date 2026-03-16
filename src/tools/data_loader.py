@@ -6,6 +6,7 @@ No AI logic here — pure data access.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import date
 from typing import Any
@@ -14,6 +15,9 @@ import pandas as pd
 import yaml
 
 from src.data.snowflake_connector import executions_conn, query_to_df, trades_conn
+from src.exceptions import DataLoadError, DataQualityError
+
+logger = logging.getLogger(__name__)
 
 # Load field mappings once at import time
 _MAPPINGS_PATH = os.path.join(os.path.dirname(__file__), "../../config/field_mappings.yaml")
@@ -61,11 +65,23 @@ def load_booked_trades(trade_date: str) -> str:
           AND {cols['status']} IN ({status_list})
     """
 
-    with trades_conn() as conn:
-        df = query_to_df(conn, sql, params=(trade_date,))
+    try:
+        with trades_conn() as conn:
+            df = query_to_df(conn, sql, params=(trade_date,))
+    except Exception as exc:
+        raise DataLoadError(f"Failed to load booked trades for {trade_date}") from exc
 
     if df.empty:
+        logger.warning("No booked trades found for %s — returning empty dataset", trade_date)
         return json.dumps({"trades": [], "count": 0, "trade_date": trade_date})
+
+    # Validate required columns are present
+    required = {"trade_id", "isin", "quantity", "price", "settlement_date"}
+    missing = required - set(df.columns)
+    if missing:
+        raise DataQualityError(
+            f"Booked trades query for {trade_date} missing required columns: {missing}"
+        )
 
     # Normalise date columns to string for JSON serialisation
     for col in ["trade_date", "settlement_date"]:
@@ -125,11 +141,23 @@ def load_executed_transactions(trade_date: str) -> str:
           AND {cols['status']} IN ({status_list})
     """
 
-    with executions_conn() as conn:
-        df = query_to_df(conn, sql, params=(trade_date,))
+    try:
+        with executions_conn() as conn:
+            df = query_to_df(conn, sql, params=(trade_date,))
+    except Exception as exc:
+        raise DataLoadError(f"Failed to load executed transactions for {trade_date}") from exc
 
     if df.empty:
+        logger.warning("No executed transactions found for %s — returning empty dataset", trade_date)
         return json.dumps({"executions": [], "count": 0, "trade_date": trade_date})
+
+    # Validate required columns are present
+    required = {"execution_id", "executed_quantity", "executed_price", "settlement_date"}
+    missing = required - set(df.columns)
+    if missing:
+        raise DataQualityError(
+            f"Executed transactions query for {trade_date} missing required columns: {missing}"
+        )
 
     for col in ["execution_date", "settlement_date"]:
         if col in df.columns:

@@ -12,6 +12,7 @@ from datetime import datetime
 import pandas as pd
 
 from src.data.snowflake_connector import bulk_insert, execute_ddl, results_conn
+from src.exceptions import PersistenceError
 
 
 def _get_schema() -> str:
@@ -39,8 +40,11 @@ def write_recon_run(run_record: dict) -> str:
     df = pd.DataFrame([run_record])
     df.columns = [c.upper() for c in df.columns]
 
-    with results_conn() as conn:
-        n = bulk_insert(conn, "RECON_RUNS", df, _get_schema(), _get_database())
+    try:
+        with results_conn() as conn:
+            n = bulk_insert(conn, "RECON_RUNS", df, _get_schema(), _get_database())
+    except Exception as exc:
+        raise PersistenceError("Failed to write RECON_RUNS record") from exc
 
     return json.dumps({"written": n, "table": "RECON_RUNS", "run_id": run_record.get("run_id")})
 
