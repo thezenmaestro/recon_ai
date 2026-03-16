@@ -105,7 +105,26 @@ class RunEvent(BaseModel):
 
 
 # =============================================================================
-# 4. NOTIFICATION_DELIVERIES — outcome of every alert dispatch attempt
+# 4. DATA_QUALITY_METRICS — record counts, null rates, and latency per load
+# =============================================================================
+class DataQualityMetricEvent(BaseModel):
+    metric_id:        str      = Field(default_factory=lambda: str(uuid.uuid4()))
+    run_id:           Optional[str] = None
+    trade_date:       Optional[str] = None       # YYYY-MM-DD
+    dataset:          str                        # trades | executions
+    record_count:     int      = 0
+    null_trade_id:    int      = 0               # rows where trade_id / execution_id is null
+    null_isin:        int      = 0
+    null_quantity:    int      = 0               # quantity or executed_quantity
+    null_price:       int      = 0               # price or executed_price
+    query_latency_ms: int      = 0               # wall-clock ms for the Snowflake query
+    status:           str      = "SUCCESS"       # SUCCESS | EMPTY | FAILURE
+    error_message:    Optional[str] = None
+    measured_at:      datetime = Field(default_factory=datetime.utcnow)
+
+
+# =============================================================================
+# 5. NOTIFICATION_DELIVERIES — outcome of every alert dispatch attempt
 # =============================================================================
 class NotificationDeliveryEvent(BaseModel):
     delivery_id:    str      = Field(default_factory=lambda: str(uuid.uuid4()))

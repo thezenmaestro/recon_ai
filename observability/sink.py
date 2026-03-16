@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 from observability.models import (
     AIAPICallEvent,
+    DataQualityMetricEvent,
     NotificationDeliveryEvent,
     RunEvent,
     ToolCallEvent,
@@ -97,7 +98,24 @@ CREATE TABLE IF NOT EXISTS OBSERVABILITY.RUN_EVENTS (
     OCCURRED_AT                 TIMESTAMP_NTZ
 );
 
--- ── 4. Notification Deliveries ───────────────────────────────────────────────
+-- ── 4. Data Quality Metrics ──────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS OBSERVABILITY.DATA_QUALITY_METRICS (
+    METRIC_ID           VARCHAR(64)     NOT NULL PRIMARY KEY,
+    RUN_ID              VARCHAR(64),
+    TRADE_DATE          DATE,
+    DATASET             VARCHAR(32),
+    RECORD_COUNT        INTEGER,
+    NULL_TRADE_ID       INTEGER,
+    NULL_ISIN           INTEGER,
+    NULL_QUANTITY       INTEGER,
+    NULL_PRICE          INTEGER,
+    QUERY_LATENCY_MS    INTEGER,
+    STATUS              VARCHAR(16),
+    ERROR_MESSAGE       TEXT,
+    MEASURED_AT         TIMESTAMP_NTZ
+);
+
+-- ── 5. Notification Deliveries ───────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS OBSERVABILITY.NOTIFICATION_DELIVERIES (
     DELIVERY_ID     VARCHAR(64)     NOT NULL PRIMARY KEY,
     RUN_ID          VARCHAR(64),
@@ -205,6 +223,22 @@ LEFT JOIN (
 ) cost ON re.RUN_ID = cost.RUN_ID
 WHERE re.EVENT_TYPE = 'COMPLETED';
 
+-- Data quality trends: null rates and record volume over time
+CREATE OR REPLACE VIEW OBSERVABILITY.V_DATA_QUALITY_TRENDS AS
+SELECT
+    TRADE_DATE,
+    DATASET,
+    AVG(RECORD_COUNT)                                                           AS avg_record_count,
+    AVG(QUERY_LATENCY_MS)                                                       AS avg_latency_ms,
+    MAX(QUERY_LATENCY_MS)                                                       AS max_latency_ms,
+    ROUND(AVG(NULL_ISIN   * 100.0 / NULLIF(RECORD_COUNT, 0)), 2)                AS avg_null_isin_pct,
+    ROUND(AVG(NULL_QUANTITY * 100.0 / NULLIF(RECORD_COUNT, 0)), 2)              AS avg_null_qty_pct,
+    ROUND(AVG(NULL_PRICE  * 100.0 / NULLIF(RECORD_COUNT, 0)), 2)                AS avg_null_price_pct,
+    COUNT_IF(STATUS = 'EMPTY')                                                  AS empty_count,
+    COUNT_IF(STATUS = 'FAILURE')                                                AS failure_count
+FROM OBSERVABILITY.DATA_QUALITY_METRICS
+GROUP BY 1, 2;
+
 -- Notification delivery success/failure rates by channel
 CREATE OR REPLACE VIEW OBSERVABILITY.V_NOTIFICATION_DELIVERIES AS
 SELECT
@@ -301,6 +335,11 @@ class ObservabilitySink:
         data = event.model_dump()
         data["occurred_at"] = data["occurred_at"].isoformat()
         self._insert("RUN_EVENTS", data)
+
+    def log_data_quality(self, event: DataQualityMetricEvent) -> None:
+        data = event.model_dump()
+        data["measured_at"] = data["measured_at"].isoformat()
+        self._insert("DATA_QUALITY_METRICS", data)
 
     def log_notification(self, event: NotificationDeliveryEvent) -> None:
         data = event.model_dump()

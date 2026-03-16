@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from datetime import date
 from typing import Any
 
@@ -65,14 +66,19 @@ def load_booked_trades(trade_date: str) -> str:
           AND {cols['status']} IN ({status_list})
     """
 
+    t0 = time.monotonic()
     try:
         with trades_conn() as conn:
             df = query_to_df(conn, sql, params=(trade_date,))
     except Exception as exc:
+        _emit_data_quality("trades", trade_date, 0, {}, int((time.monotonic() - t0) * 1000),
+                           "FAILURE", str(exc))
         raise DataLoadError(f"Failed to load booked trades for {trade_date}") from exc
+    latency_ms = int((time.monotonic() - t0) * 1000)
 
     if df.empty:
         logger.warning("No booked trades found for %s — returning empty dataset", trade_date)
+        _emit_data_quality("trades", trade_date, 0, {}, latency_ms, "EMPTY")
         return json.dumps({"trades": [], "count": 0, "trade_date": trade_date})
 
     # Validate required columns are present
@@ -82,6 +88,14 @@ def load_booked_trades(trade_date: str) -> str:
         raise DataQualityError(
             f"Booked trades query for {trade_date} missing required columns: {missing}"
         )
+
+    null_counts = {
+        "null_trade_id": int(df["trade_id"].isna().sum()),
+        "null_isin":     int(df["isin"].isna().sum()),
+        "null_quantity": int(df["quantity"].isna().sum()),
+        "null_price":    int(df["price"].isna().sum()),
+    }
+    _emit_data_quality("trades", trade_date, len(df), null_counts, latency_ms, "SUCCESS")
 
     # Normalise date columns to string for JSON serialisation
     for col in ["trade_date", "settlement_date"]:
@@ -141,14 +155,19 @@ def load_executed_transactions(trade_date: str) -> str:
           AND {cols['status']} IN ({status_list})
     """
 
+    t0 = time.monotonic()
     try:
         with executions_conn() as conn:
             df = query_to_df(conn, sql, params=(trade_date,))
     except Exception as exc:
+        _emit_data_quality("executions", trade_date, 0, {}, int((time.monotonic() - t0) * 1000),
+                           "FAILURE", str(exc))
         raise DataLoadError(f"Failed to load executed transactions for {trade_date}") from exc
+    latency_ms = int((time.monotonic() - t0) * 1000)
 
     if df.empty:
         logger.warning("No executed transactions found for %s — returning empty dataset", trade_date)
+        _emit_data_quality("executions", trade_date, 0, {}, latency_ms, "EMPTY")
         return json.dumps({"executions": [], "count": 0, "trade_date": trade_date})
 
     # Validate required columns are present
@@ -158,6 +177,14 @@ def load_executed_transactions(trade_date: str) -> str:
         raise DataQualityError(
             f"Executed transactions query for {trade_date} missing required columns: {missing}"
         )
+
+    null_counts = {
+        "null_trade_id": int(df["execution_id"].isna().sum()),
+        "null_isin":     int(df["isin"].isna().sum()),
+        "null_quantity": int(df["executed_quantity"].isna().sum()),
+        "null_price":    int(df["executed_price"].isna().sum()),
+    }
+    _emit_data_quality("executions", trade_date, len(df), null_counts, latency_ms, "SUCCESS")
 
     for col in ["execution_date", "settlement_date"]:
         if col in df.columns:
@@ -172,3 +199,37 @@ def load_executed_transactions(trade_date: str) -> str:
         "count": len(df),
         "trade_date": trade_date,
     })
+
+
+# =============================================================================
+# OBSERVABILITY HELPER
+# =============================================================================
+
+def _emit_data_quality(
+    dataset: str,
+    trade_date: str,
+    record_count: int,
+    null_counts: dict,
+    query_latency_ms: int,
+    status: str,
+    error_message: str | None = None,
+) -> None:
+    """Fire-and-forget write to OBSERVABILITY.DATA_QUALITY_METRICS."""
+    try:
+        from observability.models import DataQualityMetricEvent
+        from observability.sink import get_sink
+        event = DataQualityMetricEvent(
+            trade_date=trade_date,
+            dataset=dataset,
+            record_count=record_count,
+            null_trade_id=null_counts.get("null_trade_id", 0),
+            null_isin=null_counts.get("null_isin", 0),
+            null_quantity=null_counts.get("null_quantity", 0),
+            null_price=null_counts.get("null_price", 0),
+            query_latency_ms=query_latency_ms,
+            status=status,
+            error_message=error_message,
+        )
+        get_sink().log_data_quality(event)
+    except Exception as exc:
+        logger.warning("Failed to write data quality metrics to OBSERVABILITY: %s", exc)
