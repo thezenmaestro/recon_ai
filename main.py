@@ -58,6 +58,15 @@ def main() -> None:
     args = parser.parse_args()
     _configure_logging()
 
+    # ── Config validation — fail fast before opening any connections ──────────
+    if not args.setup_tables:
+        from src.config_validator import ConfigurationError, validate_all
+        try:
+            validate_all()
+        except ConfigurationError as exc:
+            print(str(exc), file=sys.stderr)
+            sys.exit(2)
+
     # ── One-time setup ────────────────────────────────────────────────────────
     if args.setup_tables:
         from src.data.snowflake_connector import create_result_tables
