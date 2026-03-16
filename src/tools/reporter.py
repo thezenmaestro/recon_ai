@@ -132,7 +132,8 @@ def finalise_recon_run(run_id: str, status: str, error_message: str | None = Non
             ERROR_MESSAGE = %s
         WHERE RUN_ID = %s
     """
+    params = (status, datetime.utcnow().isoformat(), error_message, run_id)
     with results_conn() as conn:
-        execute_ddl(conn, sql)   # execute_ddl handles commit
+        execute_ddl(conn, sql, params=params)
 
     return json.dumps({"run_id": run_id, "status": status, "updated": True})

@@ -80,10 +80,10 @@ def query_to_df(conn: SnowflakeConnection, sql: str, params: Optional[tuple] = N
     return pd.DataFrame(rows) if rows else pd.DataFrame()
 
 
-def execute_ddl(conn: SnowflakeConnection, sql: str) -> None:
-    """Execute a non-SELECT statement (INSERT, MERGE, CREATE, etc.)."""
+def execute_ddl(conn: SnowflakeConnection, sql: str, params: Optional[tuple] = None) -> None:
+    """Execute a non-SELECT statement (INSERT, UPDATE, MERGE, CREATE, etc.)."""
     with conn.cursor() as cur:
-        cur.execute(sql)
+        cur.execute(sql, params or ())
     conn.commit()
 
 
