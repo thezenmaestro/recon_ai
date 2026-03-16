@@ -21,7 +21,7 @@ import yaml
 
 # Load business rules once
 _RULES_PATH = os.path.join(os.path.dirname(__file__), "../../config/business_rules.yaml")
-with open(_RULES_PATH) as f:
+with open(_RULES_PATH, encoding="utf-8") as f:
     RULES = yaml.safe_load(f)
 
 

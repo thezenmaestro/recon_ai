@@ -13,7 +13,7 @@ from src.notifications.retry import TransientError, retry_with_backoff
 logger = logging.getLogger(__name__)
 
 _ROUTING_PATH = os.path.join(os.path.dirname(__file__), "../../config/alert_routing.yaml")
-with open(_ROUTING_PATH) as _f:
+with open(_ROUTING_PATH, encoding="utf-8") as _f:
     _ROUTING = yaml.safe_load(_f)
 
 _SLACK_FMT = _ROUTING.get("notification_formatting", {}).get("slack", {})

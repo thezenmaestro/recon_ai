@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Load field mappings once at import time
 _MAPPINGS_PATH = os.path.join(os.path.dirname(__file__), "../../config/field_mappings.yaml")
-with open(_MAPPINGS_PATH) as f:
+with open(_MAPPINGS_PATH, encoding="utf-8") as f:
     MAPPINGS = yaml.safe_load(f)
 
 

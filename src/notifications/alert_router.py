@@ -18,7 +18,7 @@ from src.notifications.teams_notifier import send_teams
 logger = logging.getLogger(__name__)
 
 _ROUTING_PATH = os.path.join(os.path.dirname(__file__), "../../config/alert_routing.yaml")
-with open(_ROUTING_PATH) as f:
+with open(_ROUTING_PATH, encoding="utf-8") as f:
     ROUTING = yaml.safe_load(f)
 
 

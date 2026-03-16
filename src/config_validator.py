@@ -107,7 +107,7 @@ def _check_field_mappings() -> list[str]:
     if not path.exists():
         return [f"config/field_mappings.yaml not found at {path}"]
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
     except yaml.YAMLError as e:
         return [f"config/field_mappings.yaml is not valid YAML: {e}"]
@@ -135,7 +135,7 @@ def _check_business_rules() -> list[str]:
     if not path.exists():
         return [f"config/business_rules.yaml not found at {path}"]
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
     except yaml.YAMLError as e:
         return [f"config/business_rules.yaml is not valid YAML: {e}"]
@@ -172,7 +172,7 @@ def _check_alert_routing() -> list[str]:
     if not path.exists():
         return [f"config/alert_routing.yaml not found at {path}"]
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
     except yaml.YAMLError as e:
         return [f"config/alert_routing.yaml is not valid YAML: {e}"]
