@@ -17,6 +17,18 @@ class BreakExplanation(BaseModel):
     needs_human_review: bool    # True if Claude is uncertain
 
 
+class ClaudeEnrichmentResponse(BaseModel):
+    """
+    Structured response from the single Claude enrichment call.
+    Claude enhances HIGH-severity break explanations and produces the run narrative.
+    LOW and MEDIUM breaks are handled locally by break_enricher.py.
+    """
+    break_explanations: List[BreakExplanation]  # Enhanced explanations for HIGH breaks only
+    narrative: str                              # 2-3 sentence executive summary
+    key_themes: List[str]                       # Cross-break patterns Claude observed
+    immediate_actions: List[str]                # Ordered ops action list
+
+
 class ReconSummary(BaseModel):
     """Claude's narrative summary of the entire reconciliation run."""
     run_id: str

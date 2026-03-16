@@ -1,26 +1,32 @@
 """
-Reconciliation Agent — the AI orchestration layer.
-Uses Claude Opus 4.6 with tool use to run the full reconciliation pipeline.
+Reconciliation Agent — pipeline orchestration and targeted AI enrichment.
 
-This is the ONLY file that imports anthropic.
-All business logic lives in src/tools/ and is called via @beta_tool.
+The pipeline runs as hard-coded Python steps (no AI involved in orchestration).
+Claude is called ONCE per run, only when HIGH severity breaks exist, to:
+  - Enhance break explanations beyond what templates provide
+  - Identify cross-break patterns
+  - Write an executive narrative
+
+On a clean day (zero breaks) no API call is made at all.
 """
 from __future__ import annotations
 
 import json
-import os
 import uuid
-from datetime import datetime, date
+from datetime import datetime
 
-import anthropic
-from anthropic import beta_tool
 from observability.tracker import TrackedAnthropic
 from observability.models import RunEvent
 from observability.sink import get_sink
 
-from src.agents.prompts import build_task_prompt, load_system_prompt
-from src.schemas.recon_output import ReconSummary
+from src.agents.prompts import build_enrichment_prompt, load_system_prompt
+from src.schemas.recon_output import (
+    BreakExplanation,
+    ClaudeEnrichmentResponse,
+    ReconSummary,
+)
 from src.tools.break_classifier import classify_breaks
+from src.tools.break_enricher import enrich_breaks_locally
 from src.tools.data_loader import load_booked_trades, load_executed_transactions
 from src.tools.matcher import match_transactions
 from src.tools.position_impact import calculate_position_impact
@@ -34,124 +40,39 @@ from src.tools.reporter import (
 from src.notifications.alert_router import route_alerts
 
 
-# =============================================================================
-# TOOL DEFINITIONS — wrap each tool function with @beta_tool
-# These are the ONLY functions Claude can call. Keep them thin wrappers.
-# =============================================================================
-
-@beta_tool
-def tool_load_booked_trades(trade_date: str) -> str:
-    """Load all booked trades from the OMS Snowflake database for a given trade date.
-
-    Args:
-        trade_date: Trade date in YYYY-MM-DD format.
-    """
-    return load_booked_trades(trade_date)
-
-
-@beta_tool
-def tool_load_executed_transactions(trade_date: str) -> str:
-    """Load all execution confirms from the broker Snowflake database for a given trade date.
-
-    Args:
-        trade_date: Trade date in YYYY-MM-DD format.
-    """
-    return load_executed_transactions(trade_date)
-
-
-@beta_tool
-def tool_match_transactions(trades_json: str, executions_json: str) -> str:
-    """Match booked trades against execution confirms using rule-based key hierarchy.
-    Returns matched pairs and unmatched records.
-
-    Args:
-        trades_json: JSON output from tool_load_booked_trades.
-        executions_json: JSON output from tool_load_executed_transactions.
-    """
-    return match_transactions(trades_json, executions_json)
-
-
-@beta_tool
-def tool_classify_breaks(match_results_json: str) -> str:
-    """Classify unmatched records into typed breaks with severity scores.
-
-    Args:
-        match_results_json: JSON output from tool_match_transactions.
-    """
-    return classify_breaks(match_results_json)
-
-
-@beta_tool
-def tool_calculate_position_impact(breaks_json: str, trade_date: str) -> str:
-    """Calculate open position impact, P&L exposure, and settlement/funding risk for each break.
-
-    Args:
-        breaks_json: JSON output from tool_classify_breaks (with ai_explanation populated).
-        trade_date: Trade date in YYYY-MM-DD format for price/rate lookups.
-    """
-    return calculate_position_impact(breaks_json, trade_date)
-
-
-@beta_tool
-def tool_write_matched_trades(matched_json: str, run_id: str) -> str:
-    """Persist matched trade pairs to the RECON_DB.RESULTS.MATCHED_TRADES Snowflake table.
-
-    Args:
-        matched_json: JSON string containing the 'matched' array from tool_match_transactions.
-        run_id: The reconciliation run ID.
-    """
-    return write_matched_trades(matched_json, run_id)
-
-
-@beta_tool
-def tool_write_breaks(breaks_json: str) -> str:
-    """Persist break records (including AI explanations) to RECON_DB.RESULTS.BREAKS.
-
-    Args:
-        breaks_json: JSON output from tool_classify_breaks after adding ai_explanation
-                     and recommended_action to each break record.
-    """
-    return write_breaks(breaks_json)
-
-
-@beta_tool
-def tool_write_position_impacts(impacts_json: str) -> str:
-    """Persist position/valuation impacts to RECON_DB.RESULTS.POSITION_IMPACT.
-
-    Args:
-        impacts_json: JSON output from tool_calculate_position_impact.
-    """
-    return write_position_impacts(impacts_json)
-
-
-@beta_tool
-def tool_route_alerts(breaks_json: str, run_id: str, trade_date: str) -> str:
-    """Route break alerts to Slack, Email, and Teams based on severity and asset class.
-
-    Args:
-        breaks_json: JSON output from tool_classify_breaks with AI explanations populated.
-        run_id: The reconciliation run ID.
-        trade_date: Trade date in YYYY-MM-DD format.
-    """
-    return route_alerts(breaks_json, run_id, trade_date)
+# JSON schema for the single Claude call — used with output_config for guaranteed
+# valid structure. Avoids the brittle string-splitting previously used in _extract_summary.
+_ENRICHMENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "break_explanations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "break_id":          {"type": "string"},
+                    "ai_explanation":    {"type": "string"},
+                    "recommended_action":{"type": "string"},
+                    "confidence":        {"type": "string"},
+                    "needs_human_review":{"type": "boolean"},
+                },
+                "required": ["break_id", "ai_explanation", "recommended_action",
+                             "confidence", "needs_human_review"],
+                "additionalProperties": False,
+            },
+        },
+        "narrative":         {"type": "string"},
+        "key_themes":        {"type": "array", "items": {"type": "string"}},
+        "immediate_actions": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["break_explanations", "narrative", "key_themes", "immediate_actions"],
+    "additionalProperties": False,
+}
 
 
 # =============================================================================
-# AGENT RUNNER
+# PIPELINE
 # =============================================================================
-
-ALL_TOOLS = [
-    tool_load_booked_trades,
-    tool_load_executed_transactions,
-    tool_match_transactions,
-    tool_classify_breaks,
-    tool_calculate_position_impact,
-    tool_write_matched_trades,
-    tool_write_breaks,
-    tool_write_position_impacts,
-    tool_route_alerts,
-]
-
 
 def run_reconciliation(
     trade_date: str,
@@ -159,12 +80,15 @@ def run_reconciliation(
     triggered_by: str = "airflow",
 ) -> ReconSummary:
     """
-    Run the full nightly trade reconciliation for a given trade date.
+    Run the full trade reconciliation for a given trade date.
+
+    Steps 1–7 execute as direct Python function calls (no AI orchestration).
+    A single Claude call is made at step 4 only when HIGH severity breaks exist.
 
     Args:
         trade_date: Date to reconcile in YYYY-MM-DD format.
         run_id: Optional run ID (auto-generated if not provided).
-        triggered_by: Who/what triggered this run — 'airflow', 'manual', 'event'.
+        triggered_by: 'airflow', 'manual', or 'event'.
 
     Returns:
         ReconSummary — structured summary of the reconciliation run.
@@ -172,13 +96,12 @@ def run_reconciliation(
     if run_id is None:
         run_id = f"RECON-{trade_date}-{uuid.uuid4().hex[:8].upper()}"
 
-    client = TrackedAnthropic(       # drop-in replacement — logs all API usage to Snowflake
+    client = TrackedAnthropic(
         run_id=run_id,
         trade_date=trade_date,
         triggered_by=triggered_by,
     )
 
-    # ── Register this run in Snowflake ───────────────────────────────────────
     write_recon_run({
         "run_id": run_id,
         "trade_date": trade_date,
@@ -187,12 +110,11 @@ def run_reconciliation(
         "status": "RUNNING",
     })
 
-    print(f"[{run_id}] Starting reconciliation for trade date {trade_date}...")
+    print(f"[{run_id}] Starting reconciliation for {trade_date}...")
 
     sink = get_sink()
     run_start = datetime.utcnow()
 
-    # Log RUN STARTED event
     sink.log_run_event(RunEvent(
         run_id=run_id,
         trade_date=trade_date,
@@ -203,31 +125,88 @@ def run_reconciliation(
     ))
 
     try:
-        # ── Run the agentic loop ─────────────────────────────────────────────
-        runner = client.beta.messages.tool_runner(
-            model="claude-opus-4-6",
-            max_tokens=8192,
-            thinking={"type": "adaptive"},     # Let Claude reason through complex breaks
-            system=load_system_prompt(),
-            tools=ALL_TOOLS,
-            messages=[{
-                "role": "user",
-                "content": build_task_prompt(trade_date, run_id),
-            }],
+        # ── Step 1: Load data ─────────────────────────────────────────────────
+        print(f"[{run_id}] Loading trades and executions...")
+        trades_json = load_booked_trades(trade_date)
+        executions_json = load_executed_transactions(trade_date)
+
+        trades_count = len(json.loads(trades_json).get("trades", []))
+        exec_count = len(json.loads(executions_json).get("executions", []))
+        print(f"[{run_id}] Loaded {trades_count:,} trades, {exec_count:,} executions.")
+
+        # ── Step 2: Match ─────────────────────────────────────────────────────
+        print(f"[{run_id}] Matching...")
+        match_json = match_transactions(trades_json, executions_json)
+        match_data = json.loads(match_json)
+        matched_count = len(match_data.get("matched", []))
+        unmatched_count = len(match_data.get("unmatched_trades", []))
+        print(f"[{run_id}] {matched_count:,} matched, {unmatched_count:,} unmatched.")
+
+        # ── Step 3: Classify breaks ───────────────────────────────────────────
+        print(f"[{run_id}] Classifying breaks...")
+        breaks_json = classify_breaks(match_json)
+        breaks_data = json.loads(breaks_json)
+        all_breaks = breaks_data.get("breaks", [])
+        brk_summary = breaks_data.get("summary", {})
+        total_breaks = brk_summary.get("total_breaks", 0)
+        by_severity = brk_summary.get("by_severity", {})
+        print(f"[{run_id}] {total_breaks} breaks — "
+              f"HIGH: {by_severity.get('HIGH', 0)}, "
+              f"MEDIUM: {by_severity.get('MEDIUM', 0)}, "
+              f"LOW: {by_severity.get('LOW', 0)}")
+
+        # ── Step 4: Enrich breaks ─────────────────────────────────────────────
+        # 4a. Template enrichment — all breaks, no API call
+        breaks_data = enrich_breaks_locally(breaks_data)
+        all_breaks = breaks_data["breaks"]
+
+        # 4b. Claude enrichment — HIGH breaks only, single API call
+        high_breaks = [b for b in all_breaks if b.get("severity") == "HIGH"]
+        match_stats = {
+            "matched_count": matched_count,
+            "by_severity": by_severity,
+        }
+        claude_response = _enrich_with_claude(
+            client, high_breaks, all_breaks, match_stats, trade_date, run_id
         )
 
-        final_message = None
-        for message in runner:
-            # Stream progress to logs
-            for block in message.content:
-                if hasattr(block, "type") and block.type == "text":
-                    print(f"[Claude] {block.text[:200]}...")
-            final_message = message
+        # Merge Claude's enhanced explanations back into the full breaks list
+        if claude_response:
+            enhanced = {e["break_id"]: e for e in claude_response.get("break_explanations", [])}
+            for brk in all_breaks:
+                if brk["break_id"] in enhanced:
+                    upd = enhanced[brk["break_id"]]
+                    brk["ai_explanation"] = upd["ai_explanation"]
+                    brk["recommended_action"] = upd["recommended_action"]
+                    brk["confidence"] = upd["confidence"]
+                    brk["needs_human_review"] = upd["needs_human_review"]
 
-        # ── Parse structured summary from Claude's final response ────────────
-        summary = _extract_summary(final_message, run_id, trade_date)
+        breaks_data["breaks"] = all_breaks
+        enriched_breaks_json = json.dumps(breaks_data)
 
-        # ── Mark run complete ────────────────────────────────────────────────
+        # ── Step 5: Position impact ───────────────────────────────────────────
+        print(f"[{run_id}] Calculating position impact...")
+        impacts_json = calculate_position_impact(enriched_breaks_json, trade_date)
+
+        # ── Step 6: Write results ─────────────────────────────────────────────
+        print(f"[{run_id}] Writing results to Snowflake...")
+        write_matched_trades(match_json, run_id)
+        write_breaks(enriched_breaks_json)
+        write_position_impacts(impacts_json)
+
+        # ── Step 7: Route alerts ──────────────────────────────────────────────
+        print(f"[{run_id}] Routing alerts...")
+        route_alerts(enriched_breaks_json, run_id, trade_date)
+
+        # ── Build summary ─────────────────────────────────────────────────────
+        summary = _build_summary(
+            run_id=run_id,
+            trade_date=trade_date,
+            all_breaks=all_breaks,
+            brk_summary=brk_summary,
+            claude_response=claude_response,
+        )
+
         duration = (datetime.utcnow() - run_start).total_seconds()
         finalise_recon_run(run_id, "COMPLETED")
 
@@ -237,22 +216,20 @@ def run_reconciliation(
             event_type="COMPLETED",
             triggered_by=triggered_by,
             status="COMPLETED",
-            total_trades=summary.total_breaks,       # populate from summary when available
             break_count=summary.total_breaks,
             high_severity_count=summary.high_severity_count,
             total_notional_at_risk_usd=summary.total_notional_at_risk_usd,
             duration_seconds=round(duration, 2),
         ))
 
-        print(f"[{run_id}] Reconciliation complete. Status: {summary.overall_status}")
+        print(f"[{run_id}] Done. Status: {summary.overall_status}")
         return summary
 
     except Exception as e:
         error_msg = str(e)
         duration = (datetime.utcnow() - run_start).total_seconds()
-        print(f"[{run_id}] Reconciliation FAILED: {error_msg}")
+        print(f"[{run_id}] FAILED: {error_msg}")
         finalise_recon_run(run_id, "FAILED", error_message=error_msg)
-
         sink.log_run_event(RunEvent(
             run_id=run_id,
             trade_date=trade_date,
@@ -266,59 +243,152 @@ def run_reconciliation(
 
 
 # =============================================================================
-# SUMMARY EXTRACTOR
+# CLAUDE ENRICHMENT — single call, HIGH breaks only
 # =============================================================================
 
-def _extract_summary(final_message, run_id: str, trade_date: str) -> ReconSummary:
+def _enrich_with_claude(
+    client,
+    high_breaks: list,
+    all_breaks: list,
+    match_stats: dict,
+    trade_date: str,
+    run_id: str,
+) -> dict | None:
     """
-    Extract the ReconSummary from Claude's final message.
-    Claude is instructed to return a JSON-serialisable summary — we parse it here.
-    Falls back to a minimal summary if parsing fails.
+    Make a single Claude API call to enhance HIGH severity break explanations
+    and produce the cross-break narrative. Returns None on clean runs.
     """
-    if final_message is None:
-        return _minimal_summary(run_id, trade_date, "Agent produced no final message.")
+    if not high_breaks:
+        print(f"[{run_id}] No HIGH severity breaks — skipping Claude API call.")
+        return None
 
-    for block in final_message.content:
-        if hasattr(block, "type") and block.type == "text":
-            text = block.text
-            # Try to extract JSON from Claude's response
+    print(f"[{run_id}] Calling Claude to enhance {len(high_breaks)} HIGH break(s)...")
+
+    prompt = build_enrichment_prompt(high_breaks, all_breaks, match_stats, trade_date)
+
+    response = client.messages.create(
+        model="claude-opus-4-6",
+        max_tokens=4096,
+        thinking={"type": "adaptive"},
+        system=load_system_prompt(),
+        messages=[{"role": "user", "content": prompt}],
+        output_config={
+            "format": {
+                "type": "json_schema",
+                "schema": _ENRICHMENT_SCHEMA,
+            }
+        },
+    )
+
+    for block in response.content:
+        if getattr(block, "type", None) == "text":
             try:
-                # Claude may wrap the JSON in markdown code fences
-                if "```json" in text:
-                    text = text.split("```json")[1].split("```")[0].strip()
-                elif "```" in text:
-                    text = text.split("```")[1].split("```")[0].strip()
+                return json.loads(block.text)
+            except json.JSONDecodeError:
+                print(f"[{run_id}] Warning: Claude enrichment response was not valid JSON. "
+                      "Using template explanations for all HIGH breaks.")
+                return None
 
-                data = json.loads(text)
-                return ReconSummary(**data)
-            except Exception:
-                # Return Claude's text as a narrative if JSON parsing fails
-                return ReconSummary(
-                    run_id=run_id,
-                    trade_date=trade_date,
-                    overall_status="BREAKS_FOUND",
-                    total_breaks=0,
-                    high_severity_count=0,
-                    total_notional_at_risk_usd=0.0,
-                    narrative=text[:1000],
-                    key_themes=[],
-                    immediate_actions=[],
-                    break_explanations=[],
-                )
-
-    return _minimal_summary(run_id, trade_date, "No text block in final message.")
+    return None
 
 
-def _minimal_summary(run_id: str, trade_date: str, note: str) -> ReconSummary:
+# =============================================================================
+# SUMMARY BUILDER
+# =============================================================================
+
+def _build_summary(
+    run_id: str,
+    trade_date: str,
+    all_breaks: list,
+    brk_summary: dict,
+    claude_response: dict | None,
+) -> ReconSummary:
+    """Build the final ReconSummary from pipeline outputs."""
+    total_breaks = brk_summary.get("total_breaks", 0)
+    by_severity = brk_summary.get("by_severity", {})
+    high_count = by_severity.get("HIGH", 0)
+    total_notional = brk_summary.get("total_notional_at_risk_usd", 0.0)
+
+    if total_breaks == 0:
+        overall_status = "CLEAN"
+    elif high_count > 0:
+        overall_status = "CRITICAL"
+    else:
+        overall_status = "BREAKS_FOUND"
+
+    # Narrative — from Claude if available, otherwise generated locally
+    if claude_response:
+        narrative = claude_response.get("narrative", "")
+        key_themes = claude_response.get("key_themes", [])
+        immediate_actions = claude_response.get("immediate_actions", [])
+        break_explanations = [
+            BreakExplanation(**e)
+            for e in claude_response.get("break_explanations", [])
+        ]
+    else:
+        narrative = _local_narrative(trade_date, total_breaks, high_count, total_notional)
+        key_themes = _local_themes(all_breaks)
+        immediate_actions = _local_actions(all_breaks)
+        break_explanations = []
+
     return ReconSummary(
         run_id=run_id,
         trade_date=trade_date,
-        overall_status="UNKNOWN",
-        total_breaks=0,
-        high_severity_count=0,
-        total_notional_at_risk_usd=0.0,
-        narrative=note,
-        key_themes=[],
-        immediate_actions=["Review agent logs for errors."],
-        break_explanations=[],
+        overall_status=overall_status,
+        total_breaks=total_breaks,
+        high_severity_count=high_count,
+        total_notional_at_risk_usd=total_notional,
+        narrative=narrative,
+        key_themes=key_themes,
+        immediate_actions=immediate_actions,
+        break_explanations=break_explanations,
     )
+
+
+def _local_narrative(trade_date: str, total: int, high: int, notional: float) -> str:
+    if total == 0:
+        return f"All trades for {trade_date} matched cleanly. No breaks identified."
+    med_low = total - high
+    parts = []
+    if high:
+        parts.append(f"{high} HIGH severity break{'s' if high > 1 else ''} require immediate action")
+    if med_low:
+        parts.append(f"{med_low} lower-severity break{'s' if med_low > 1 else ''} flagged for review")
+    return (
+        f"{total} break{'s' if total > 1 else ''} identified for {trade_date}: "
+        f"{' and '.join(parts)}. Total notional at risk: ${notional:,.0f}."
+    )
+
+
+def _local_themes(breaks: list) -> list[str]:
+    """Identify simple patterns locally without AI."""
+    themes = []
+    from collections import Counter
+
+    cp_counts = Counter(b.get("counterparty") for b in breaks if b.get("counterparty"))
+    for cp, count in cp_counts.items():
+        if count >= 2:
+            themes.append(f"{count} breaks with {cp}")
+
+    type_counts = Counter(b.get("break_type") for b in breaks)
+    for bt, count in type_counts.most_common(3):
+        if count >= 2:
+            themes.append(f"{count} {bt} breaks")
+
+    inst_counts = Counter(b.get("instrument_type") for b in breaks if b.get("instrument_type"))
+    for inst, count in inst_counts.items():
+        if count >= 3:
+            themes.append(f"{count} breaks in {inst}")
+
+    return themes or ["No recurring patterns identified"]
+
+
+def _local_actions(breaks: list) -> list[str]:
+    """Generate prioritised action list from break data without AI."""
+    actions = []
+    high_breaks = [b for b in breaks if b.get("severity") == "HIGH"]
+    for b in high_breaks:
+        action = b.get("recommended_action", "")
+        if action and action not in actions:
+            actions.append(action)
+    return actions or ["Review all breaks before market open."]

@@ -25,7 +25,7 @@ into a separate Snowflake schema (`OBSERVABILITY`) for dashboards in Sigma / Bas
 
 | Layer | Technology |
 |---|---|
-| AI | Claude Opus 4.6 via `anthropic` Python SDK, beta tool runner |
+| AI | Claude Opus 4.6 via `anthropic` Python SDK — single targeted call per run |
 | Data | Snowflake (3 separate databases: TRADES_DB, EXECUTIONS_DB, RECON_DB) |
 | Orchestration | Apache Airflow (DAG: `trade_reconciliation_nightly`) |
 | Language | Python 3.11+, Pydantic v2 |
@@ -112,7 +112,7 @@ recon_ai/
 3. **`src/` imports from `observability/` in exactly ONE place** — `reconciliation_agent.py` line: `client = TrackedAnthropic(...)`
 4. **Config files are the single source of truth** — never hardcode table names, tolerances, or channel IDs in Python
 5. **Observability never crashes the main job** — all sink writes are wrapped in try/except and print warnings
-6. **Tool functions are thin wrappers** — `@beta_tool` decorated functions in `reconciliation_agent.py` call into `src/tools/`, no logic of their own
+6. **Pipeline is hard-coded Python** — `reconciliation_agent.py` calls `src/tools/` functions directly in fixed order; Claude is NOT the orchestrator
 
 ---
 
@@ -215,11 +215,10 @@ python main.py --date 2024-01-15
 2. Add channel config to `config/alert_routing.yaml`
 3. Wire into `src/notifications/alert_router.py`
 
-**Add a new tool for Claude to call:**
+**Add a new pipeline step:**
 1. Implement function in `src/tools/`
-2. Wrap with `@beta_tool` in `src/agents/reconciliation_agent.py`
-3. Add to `ALL_TOOLS` list
-4. Update task prompt in `src/agents/prompts.py`
+2. Call it directly in `run_reconciliation()` in `src/agents/reconciliation_agent.py` at the appropriate step
+3. If it produces break context Claude should know about, pass it into `build_enrichment_prompt()` in `src/agents/prompts.py`
 
 **Add a new observability event:**
 1. Add model to `observability/models.py`

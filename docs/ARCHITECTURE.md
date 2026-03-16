@@ -12,23 +12,20 @@
 ┌─────────────────────────────────────────────────────────────────────┐
 │                    reconciliation_agent.py                          │
 │                                                                     │
-│   TrackedAnthropic (Claude Opus 4.6 + beta tool runner)            │
-│   ┌─────────────────────────────────────────────────────────────┐  │
-│   │  System Prompt (domain knowledge from config/system_prompt) │  │
-│   │  Task Prompt   (steps 1–7 from prompts.py)                 │  │
-│   │                                                             │  │
-│   │  Claude decides which tool to call next                     │  │
-│   │  → tool runner executes → result fed back → loop           │  │
-│   └─────────────────────────────────────────────────────────────┘  │
+│   Hard-coded Python pipeline (steps 1–7 run in fixed order).       │
+│   Claude is NOT the orchestrator — Python calls each step directly. │
 │                                                                     │
-│   Tool calls (in order):                                           │
-│   1. tool_load_booked_trades()                                     │
-│   2. tool_load_executed_transactions()                             │
-│   3. tool_match_transactions()                                     │
-│   4. tool_classify_breaks()    ← Claude enriches with explanations│
-│   5. tool_calculate_position_impact()                              │
-│   6. tool_write_matched_trades() / write_breaks() / write_impacts()│
-│   7. tool_route_alerts()                                           │
+│   1. load_booked_trades()          → Python (data_loader.py)        │
+│   2. load_executed_transactions()  → Python (data_loader.py)        │
+│   3. match_transactions()          → Python (matcher.py)            │
+│   4. classify_breaks()             → Python (break_classifier.py)   │
+│      enrich_breaks_locally()       → Python templates (all breaks)  │
+│      _enrich_with_claude()         → Claude Opus 4.6 ← ONE API CALL│
+│                                      (HIGH breaks only, skipped if  │
+│                                       no HIGH breaks exist)          │
+│   5. calculate_position_impact()   → Python (position_impact.py)    │
+│   6. write_matched_trades() / ...  → Python (reporter.py)           │
+│   7. route_alerts()                → Python (alert_router.py)        │
 └──────────────┬──────────────────────────────────────┬─────────────┘
                │                                      │
                ▼                                      ▼
@@ -119,19 +116,23 @@ This is intentional and important. Claude is only used where human judgment adds
 
 | Task | Done by | Why |
 |---|---|---|
-| Load data from Snowflake | Python (`data_loader.py`) | Deterministic, testable |
+| Load data from SFTP / Snowflake | Python (`data_loader.py`) | Deterministic, testable |
 | Rule-based matching | Python (`matcher.py`) | Fast, auditable, no hallucination risk |
 | Break type classification | Python (`break_classifier.py`) | Rules-based, consistent |
 | Severity scoring | Python (threshold lookup) | Must be consistent and auditable |
-| **Explain each break in plain English** | **Claude** | Needs context-aware reasoning |
-| **Recommend next action** | **Claude** | Requires domain judgment |
-| **Identify patterns across breaks** | **Claude** | Cross-break reasoning |
-| **Produce executive narrative summary** | **Claude** | Natural language output |
+| **Template explanations (ALL breaks)** | **Python (`break_enricher.py`)** | Factual, deterministic, no API cost |
+| **Pattern detection across breaks** | **Python (`break_enricher.py`)** | Counter-based, no API cost |
+| **Enhance HIGH break explanations** | **Claude (single call)** | Risk nuance and judgment on material breaks |
+| **Executive narrative + action list** | **Claude (same single call)** | Natural language for senior management |
 | Write results to Snowflake | Python (`reporter.py`) | Deterministic, testable |
 | Route alerts | Python (`alert_router.py`) | Rules-based |
 
-Claude uses **adaptive thinking** (`thinking: {type: "adaptive"}`) so it can reason
-through complex break patterns without fixed compute budget.
+**API call frequency:**
+- Clean days (0 breaks): **0 Claude API calls**
+- Breaks but no HIGH severity: **0 Claude API calls** (templates sufficient)
+- Any HIGH severity break: **1 Claude API call** (HIGH breaks + narrative)
+
+Claude uses **adaptive thinking** (`thinking: {type: "adaptive"}`) on that single call.
 
 ---
 

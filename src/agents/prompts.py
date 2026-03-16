@@ -71,6 +71,62 @@ IMPORTANT:
 """
 
 
+def build_enrichment_prompt(high_breaks: list, all_breaks: list, match_stats: dict, trade_date: str) -> str:
+    """
+    Focused prompt for the single Claude API call per run.
+
+    The pipeline has already:
+    - Loaded, matched, and classified all breaks
+    - Applied template explanations to every break
+
+    Claude's job here is narrowly scoped:
+    1. Enhance explanations for HIGH severity breaks (templates are the baseline)
+    2. Identify cross-break patterns across ALL breaks
+    3. Write a 2-3 sentence executive narrative
+    4. Produce an ordered list of immediate actions
+
+    LOW and MEDIUM breaks are NOT sent to Claude — their template explanations
+    are sufficient and they do not require AI enrichment.
+    """
+    import json
+
+    high_breaks_json = json.dumps(high_breaks, indent=2, default=str)
+    all_break_types = [b.get("break_type") for b in all_breaks]
+    all_counterparties = [b.get("counterparty") for b in all_breaks if b.get("counterparty")]
+    total_notional = sum(b.get("notional_at_risk_usd", 0) for b in all_breaks)
+    by_severity = match_stats.get("by_severity", {})
+
+    return f"""Trade date: {trade_date}
+
+RECONCILIATION RESULTS — SUMMARY
+  Matched:       {match_stats.get("matched_count", 0):,} pairs
+  Total breaks:  {len(all_breaks)} ({by_severity.get("HIGH", 0)} HIGH / {by_severity.get("MEDIUM", 0)} MEDIUM / {by_severity.get("LOW", 0)} LOW)
+  Total notional at risk: ${total_notional:,.0f}
+  Break types seen: {", ".join(sorted(set(all_break_types)))}
+  Counterparties involved: {", ".join(sorted(set(all_counterparties)))}
+
+HIGH SEVERITY BREAKS (requiring your analysis):
+{high_breaks_json}
+
+YOUR TASKS:
+1. For each HIGH severity break above, enhance the ai_explanation with any additional
+   context, risk implications, or nuance beyond the template. Be specific — use the
+   actual trade IDs, amounts, and counterparty names already present.
+
+2. Identify patterns across ALL {len(all_breaks)} breaks (not just HIGH) — e.g. same
+   counterparty appearing multiple times, same break type clustering, instrument-level
+   concentration.
+
+3. Write a 2-3 sentence narrative suitable for senior management. Lead with the most
+   critical issue.
+
+4. List immediate actions ops must complete before market open, ordered by urgency.
+
+Return your response as JSON matching the schema exactly. Every HIGH break in the list
+above must have a corresponding entry in break_explanations.
+"""
+
+
 def build_break_explanation_prompt(breaks_json: str) -> str:
     """
     Prompt used when Claude is asked to enrich breaks with explanations only
