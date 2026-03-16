@@ -10,6 +10,18 @@
 
 # ── SOURCE A: OMS / Trade Booking System ─────────────────────────────────────
 trades:
+  # Set source to "sftp" to read from SFTP files, or "snowflake" to query directly.
+  source: sftp                              # sftp | snowflake
+
+  sftp:
+    remote_dir: /outbound/trades            # ← REPLACE: directory on the SFTP server
+    filename_pattern: "trades_*.csv"        # ← REPLACE: glob pattern for daily files
+    format: csv                             # csv | pipe | fixed-width
+    delimiter: ","                          # Field delimiter (csv=",", pipe="|", fixed-width=ignored)
+    encoding: utf-8                         # File encoding (utf-8, latin-1, cp1252, …)
+    has_header: true                        # true if first row is a header row
+    archive_dir: /outbound/trades/processed # ← REPLACE: move file here after successful ingest (leave blank to skip)
+
   snowflake:
     database: TRADES_DB           # ← REPLACE with your actual DB name
     schema: OMS                   # ← REPLACE with your actual schema
@@ -36,6 +48,18 @@ trades:
 
 # ── SOURCE B: Broker Execution Confirmations ──────────────────────────────────
 executions:
+  # Set source to "sftp" to read from SFTP files, or "snowflake" to query directly.
+  source: sftp                              # sftp | snowflake
+
+  sftp:
+    remote_dir: /confirms/daily             # ← REPLACE: directory on the broker SFTP server
+    filename_pattern: "confirms_*.csv"      # ← REPLACE: glob pattern for daily confirms files
+    format: csv                             # csv | pipe | fixed-width
+    delimiter: "|"                          # Pipe-delimited is common for broker confirms
+    encoding: utf-8
+    has_header: true
+    archive_dir: /confirms/daily/processed  # ← REPLACE: archive location after successful ingest
+
   snowflake:
     database: EXECUTIONS_DB       # ← REPLACE with your actual DB name
     schema: CONFIRMS              # ← REPLACE with your actual schema

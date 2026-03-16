@@ -26,6 +26,11 @@ requests>=2.31.0            # Slack + Teams webhooks
 pyyaml>=6.0.1
 
 # =============================================================================
+# Calendar / scheduling
+# =============================================================================
+holidays>=0.46               # Canadian federal + provincial holiday calendar
+
+# =============================================================================
 # Airflow (only needed on the Airflow worker, not in local dev)
 # Comment out if running locally without Airflow
 # =============================================================================

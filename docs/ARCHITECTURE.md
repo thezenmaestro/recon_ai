@@ -5,7 +5,7 @@
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        AIRFLOW / CLI TRIGGER                        │
-│              trade_reconciliation_nightly (Mon–Fri 20:00 UTC)       │
+│              trade_reconciliation_nightly (daily 06:00 ET)          │
 └────────────────────────────────┬────────────────────────────────────┘
                                  │
                                  ▼

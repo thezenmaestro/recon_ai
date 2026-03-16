@@ -7,13 +7,13 @@ investigate breaks, re-run reconciliation, and escalate incidents.
 
 ## Daily Routine
 
-| Time | Action |
+| Time (ET) | Action |
 |---|---|
-| 20:00 UTC | Airflow DAG triggers automatically |
-| 20:05–20:10 UTC | Snowflake connections validated, data loaded |
-| 20:10–20:15 UTC | Matching and break classification complete |
-| 20:15–20:25 UTC | Claude enriches breaks, writes results, sends alerts |
-| By 07:00 London | All HIGH severity breaks must be actioned |
+| 06:00 ET | Airflow DAG triggers automatically (skipped on Canadian / Ontario holidays) |
+| 06:05–06:10 ET | Connections validated, data loaded from SFTP/Snowflake |
+| 06:10–06:15 ET | Matching and break classification complete |
+| 06:15–06:25 ET | Claude enriches breaks, writes results, sends alerts |
+| By 08:00 ET | All reports published; HIGH severity breaks must be actioned |
 
 ---
 

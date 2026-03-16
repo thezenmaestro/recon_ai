@@ -146,7 +146,7 @@ Immediate Actions Required:
 
 ### Airflow (scheduled)
 
-The DAG `trade_reconciliation_nightly` runs automatically Mon–Fri at 20:00 UTC.
+The DAG `trade_reconciliation_nightly` runs automatically every day at 06:00 ET (America/Toronto, DST-aware), ensuring reports are ready by 08:00 ET. Canadian federal and Ontario provincial holidays are skipped automatically.
 
 ```bash
 # On the Airflow server — copy project and set env

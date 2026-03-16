@@ -15,7 +15,9 @@ for the tasks described in this guide.**
 | What counts as a break and its severity        | `business_rules.yaml` → `breaks` |
 | Risk metrics per asset class (DV01, delta)     | `business_rules.yaml` → `position` |
 | CLI exit codes for monitoring/Airflow alerts   | `business_rules.yaml` → `cli.exit_codes` |
-| Snowflake table and column names               | `field_mappings.yaml` |
+| Where trade/confirm files come from (SFTP vs Snowflake) | `field_mappings.yaml` → `trades.source` / `executions.source` |
+| SFTP file location, pattern, format            | `field_mappings.yaml` → `trades.sftp` / `executions.sftp` |
+| Snowflake table and column names               | `field_mappings.yaml` → `trades.snowflake` / `executions.snowflake` |
 | Which trades/executions are in scope           | `field_mappings.yaml` → `filters.active_statuses` |
 | FX rate data source                            | `field_mappings.yaml` → `fx_rates` |
 | Slack channel IDs                              | `alert_routing.yaml` → `channels.slack` |
@@ -224,18 +226,98 @@ monitoring should treat any break as a pipeline failure.
 
 ## `config/field_mappings.yaml`
 
-Maps the internal field names the pipeline uses to your actual Snowflake
-database, schema, table, and column names. **Edit this before the first run.**
+Maps the internal field names the pipeline uses to your actual data sources —
+either SFTP flat files or Snowflake tables (configured per source). Also
+specifies column name mappings and result table coordinates.
+**Edit this before the first run.**
 
-### Source tables
+### Choosing your data source: `source`
+
+Each input block (`trades` and `executions`) has a `source` field that tells
+the pipeline where to fetch data:
 
 ```yaml
 trades:
+  source: sftp        # sftp | snowflake
+```
+
+Set `source: sftp` if your OMS drops a daily file on an SFTP server.
+Set `source: snowflake` if the pipeline queries Snowflake directly.
+
+The `sftp` and `snowflake` subsections both exist in the file — only the one
+matching your `source` value is used. You can populate both and switch between
+them by changing a single word.
+
+---
+
+### SFTP file configuration: `trades.sftp` / `executions.sftp`
+
+Used when `source: sftp`. Non-sensitive path and format config lives here;
+credentials (host, user, password, key) stay in `.env`.
+
+```yaml
+trades:
+  source: sftp
+  sftp:
+    remote_dir: /outbound/trades        # ← REPLACE: directory on the SFTP server
+    filename_pattern: "trades_*.csv"    # ← REPLACE: glob pattern for daily files
+    format: csv                         # csv | pipe | fixed-width
+    delimiter: ","                      # field delimiter
+    encoding: utf-8                     # utf-8 | latin-1 | cp1252 | …
+    has_header: true                    # true if first row contains column names
+    archive_dir: /outbound/trades/done  # ← REPLACE (or leave blank to skip archiving)
+```
+
+**Field reference:**
+
+| Field | What to fill in |
+|---|---|
+| `remote_dir` | The directory on the SFTP server where the daily file lands |
+| `filename_pattern` | Glob pattern used to find today's file, e.g. `"trades_20240115.csv"` matches `"trades_*.csv"` |
+| `format` | `csv` for comma/delimiter files; `pipe` is a shorthand for `delimiter: "\|"`; `fixed-width` for positional files |
+| `delimiter` | The field separator character. Common: `","` (CSV), `"\|"` (pipe), `"\t"` (tab) |
+| `encoding` | Almost always `utf-8`. Use `latin-1` or `cp1252` if the file has accented characters and shows garbled text |
+| `has_header` | Set to `false` if the file has no header row — you'll also need to ensure your `columns` mapping matches the positional order |
+| `archive_dir` | After a successful ingest the file is moved here. Leave blank to leave the file in place |
+
+SFTP credentials are set in `.env` (never in this YAML):
+
+| `.env` variable | Purpose |
+|---|---|
+| `SFTP_TRADES_HOST` | SFTP server hostname |
+| `SFTP_TRADES_PORT` | Port (default 22) |
+| `SFTP_TRADES_USER` | Username |
+| `SFTP_TRADES_PASSWORD` | Password (leave blank if using key auth) |
+| `SFTP_TRADES_KEY_PATH` | Path to SSH private key file (leave blank if using password) |
+| `SFTP_TRADES_KEY_PASSPHRASE` | Key passphrase if key is encrypted |
+
+The `executions` block uses `SFTP_CONFIRMS_*` variables for the separate
+broker confirms SFTP server.
+
+---
+
+### Snowflake source configuration: `trades.snowflake` / `executions.snowflake`
+
+Used when `source: snowflake`. Fill in your actual database, schema, and table
+names — these replace the placeholder values ending in `← REPLACE`.
+
+```yaml
+trades:
+  source: snowflake
   snowflake:
     database: TRADES_DB           # ← Your actual DB name
     schema: OMS                   # ← Your actual schema
     table: BOOKED_TRADES          # ← Your actual table name
+```
 
+---
+
+### Column name mappings: `columns`
+
+The `columns` block maps the pipeline's internal field names (left side) to
+your actual column names (right side). Only change the right-hand values.
+
+```yaml
   columns:
     trade_id: TRADE_ID            # Left side: internal name (don't change)
     isin: ISIN                    # Right side: your actual column name (change this)
@@ -255,9 +337,9 @@ trades:
     active_statuses: ["BOOKED", "AMENDED"]   # Only these statuses are loaded
 ```
 
-The `executions` block follows the same pattern for your broker confirms table.
-The internal names on the left are used throughout the pipeline — only change
-the right-hand values.
+The `executions` block follows the same pattern for your broker confirms
+source. The column mapping applies whether data comes from SFTP or Snowflake —
+the pipeline normalises field names after loading.
 
 **Common issue:** If match count is unexpectedly zero, check that:
 1. `status` column values match `filters.active_statuses` exactly (case-sensitive)
@@ -567,6 +649,25 @@ notification_formatting:
 
 No code changes. Takes effect on the next run.
 
+### I want to switch from SFTP files to Snowflake (or vice versa)
+
+Change the `source` field in the relevant block and ensure the credentials/config
+for the target source are filled in:
+
+```yaml
+# config/field_mappings.yaml
+trades:
+  source: snowflake   # was: sftp
+executions:
+  source: snowflake   # was: sftp
+```
+
+For `snowflake`: fill in `trades.snowflake.database/schema/table` and ensure
+the `SNOWFLAKE_*` env vars are set.
+
+For `sftp`: fill in `trades.sftp.remote_dir`, `filename_pattern`, `format`, and
+set `SFTP_TRADES_*` env vars. No code changes needed — just restart the pipeline.
+
 ### I want to enable FX rate lookups from Snowflake
 
 1. Fill in the Snowflake coordinates in `field_mappings.yaml → fx_rates`.
@@ -580,10 +681,23 @@ No code changes. Takes effect on the next run.
 
 ## Validation checklist before first run
 
+**Data source setup:**
+- [ ] `field_mappings.yaml` — `trades.source` and `executions.source` set to `sftp` or `snowflake`
+- [ ] `field_mappings.yaml` — SFTP `remote_dir`, `filename_pattern`, `format`, and `delimiter` filled in for each source set to `sftp`
+- [ ] `field_mappings.yaml` — Snowflake DB/schema/table names filled in for each source set to `snowflake`
 - [ ] `field_mappings.yaml` — no `← REPLACE` markers remain
+- [ ] `.env` — SFTP credentials set (`SFTP_TRADES_*` and/or `SFTP_CONFIRMS_*`) for each SFTP source
+
+**Notifications:**
 - [ ] `alert_routing.yaml` — no `← REPLACE` markers remain; all webhook URLs are real
+
+**Claude domain knowledge:**
 - [ ] `config/system_prompt.md` — counterparty aliases and data quirks filled in
+
+**Infrastructure:**
 - [ ] `.env` file exists with all required environment variables (see [CLAUDE.md](../CLAUDE.md))
 - [ ] `python main.py --setup-tables` has been run
 - [ ] `python observability/setup.py` has been run
+
+**Smoke test:**
 - [ ] Test run: `python main.py --date <yesterday>` completes without CRITICAL status

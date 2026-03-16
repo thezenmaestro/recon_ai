@@ -7,14 +7,14 @@ It gives the AI complete project context so work can resume immediately without 
 
 ## What This Project Does
 
-**Trade reconciliation system** — nightly AI-powered pipeline that:
+**Trade reconciliation system** — AI-powered pipeline that runs every morning and produces reports by 08:00. It:
 1. Loads booked trades (OMS) and executed transactions (broker confirms) from separate Snowflake databases
 2. Matches them using a rule-based engine (exact key → composite key → unmatched)
 3. Classifies breaks (UNEXECUTED, QTY_MISMATCH, PRICE_MISMATCH, SETTLEMENT_DATE_MISMATCH)
 4. Has Claude Opus 4.6 explain each break and assess forward position/P&L/risk impact
 5. Writes all results back to Snowflake
 6. Routes tiered alerts to Slack, Email (SMTP), and Microsoft Teams
-7. Runs nightly via Apache Airflow (Mon–Fri 20:00 UTC)
+7. Runs daily via Apache Airflow (06:00 ET / America/Toronto — reports ready by 08:00 ET, skips Canadian federal + Ontario holidays)
 
 **Observability layer** captures all Claude API usage, tool calls, run history, and user activity
 into a separate Snowflake schema (`OBSERVABILITY`) for dashboards in Sigma / Basedash.
@@ -191,7 +191,7 @@ python observability/setup.py          # Creates OBSERVABILITY tables + views
 python main.py --date 2024-01-15
 
 # Airflow (automatic)
-# DAG: trade_reconciliation_nightly — Mon–Fri 20:00 UTC
+# DAG: trade_reconciliation_nightly — daily 06:00 ET / America/Toronto (reports by 08:00 ET)
 ```
 
 ---

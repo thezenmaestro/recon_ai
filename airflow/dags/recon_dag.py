@@ -1,17 +1,19 @@
 """
-Airflow DAG — Nightly Trade Reconciliation
-Runs every weekday night after market close.
+Airflow DAG — Daily Trade Reconciliation (Canada / Eastern Time)
+Runs every morning at 06:00 ET (America/Toronto), handles DST automatically.
+Skips Canadian federal and Ontario provincial holidays.
 
-Schedule: Mon–Fri at 20:00 UTC (adjust to your market close + buffer)
+Reports are published by 08:00 ET.
 """
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta
+from datetime import timedelta
+
+import pendulum
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.utils.dates import days_ago
 
 
 # =============================================================================
@@ -40,20 +42,24 @@ def run_recon(**context) -> dict:
     """
     import sys
     import os
+    import holidays
 
     # Ensure recon_ai is on the path — adjust if your Airflow setup differs
     sys.path.insert(0, os.environ.get("RECON_AI_PATH", "/opt/airflow/recon_ai"))
 
     from src.agents.reconciliation_agent import run_reconciliation
 
-    # Use the logical execution date as the trade date
+    # Use the logical execution date as the trade date (already in ET via DAG timezone)
     execution_date = context["logical_date"]
     trade_date = execution_date.strftime("%Y-%m-%d")
+    trade_date_obj = execution_date.date()
 
-    # Skip weekends (Airflow can also handle this via schedule, but double-check)
-    if execution_date.weekday() >= 5:   # 5=Sat, 6=Sun
-        print(f"Skipping weekend date: {trade_date}")
-        return {"skipped": True, "trade_date": trade_date}
+    # Skip Canadian federal + Ontario provincial holidays
+    ca_holidays = holidays.Canada(prov="ON")
+    if trade_date_obj in ca_holidays:
+        holiday_name = ca_holidays.get(trade_date_obj)
+        print(f"Skipping Canadian holiday: {holiday_name} ({trade_date})")
+        return {"skipped": True, "trade_date": trade_date, "reason": holiday_name}
 
     summary = run_reconciliation(
         trade_date=trade_date,
@@ -106,10 +112,10 @@ def validate_snowflake_connections(**context) -> None:
 
 with DAG(
     dag_id="trade_reconciliation_nightly",
-    description="Nightly AI-powered trade reconciliation (booked vs executed)",
+    description="Daily AI-powered trade reconciliation — 06:00 ET, reports by 08:00 ET. Skips Canadian holidays.",
     default_args=default_args,
-    schedule_interval="0 20 * * 1-5",   # Mon–Fri at 20:00 UTC
-    start_date=days_ago(1),
+    schedule_interval="0 6 * * *",       # 06:00 ET daily (DST handled by timezone below)
+    start_date=pendulum.datetime(2024, 1, 1, tz="America/Toronto"),
     catchup=False,
     max_active_runs=1,                   # Never run two recon jobs simultaneously
     tags=["reconciliation", "trade-ops", "ai"],
