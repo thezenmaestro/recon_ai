@@ -133,8 +133,11 @@ One row per break. The primary table for ops investigation and dashboard metrics
 | `NOTIONAL_AT_RISK_USD` | NUMBER(20,4) | USD value of the break (gap × price × FX rate) |
 | `BOOKED_SETTLEMENT_DATE` | DATE | Settlement date in OMS |
 | `EXECUTED_SETTLEMENT_DATE` | DATE | Settlement date from broker (NULL if UNEXECUTED) |
-| `AI_EXPLANATION` | TEXT | Claude's plain English explanation of the break |
-| `RECOMMENDED_ACTION` | TEXT | Claude's recommended next step for the ops team |
+| `AI_EXPLANATION` | TEXT | Plain English explanation of the break (template or Claude-enhanced) |
+| `RECOMMENDED_ACTION` | TEXT | Recommended next step for the ops team |
+| `ENRICHMENT_SOURCE` | VARCHAR(32) | `CLAUDE_ENHANCED` (HIGH breaks) or `TEMPLATE_ONLY` (all others) |
+| `CONFIDENCE` | VARCHAR(16) | `HIGH` (deterministic template) or as rated by Claude |
+| `NEEDS_HUMAN_REVIEW` | BOOLEAN | True for `NEEDS_REVIEW` break type or when Claude is uncertain |
 | `CREATED_AT` | TIMESTAMP_NTZ | When the break record was written |
 
 **Break type values:**
@@ -199,6 +202,7 @@ One row per Claude API call. The primary table for cost monitoring.
 | `HAD_THINKING` | BOOLEAN | Whether Claude used extended thinking |
 | `TOOL_USE_COUNT` | INTEGER | Number of tool_use blocks in the response |
 | `TRIGGERED_BY` | VARCHAR(32) | `airflow`, `manual`, `event` |
+| `CALL_PURPOSE` | VARCHAR(64) | Why this call was made (e.g. `BREAK_ENRICHMENT`). NULL for legacy rows. |
 | `CALLED_AT` | TIMESTAMP_NTZ | When the API call was made |
 | `ERROR` | TEXT | Error message if the call failed |
 
@@ -262,15 +266,19 @@ Full audit trail of all user-initiated actions.
 
 ---
 
-## Pre-Built Views (Sigma / Basedash Ready)
+## Pre-Built Views (OBSERVABILITY Schema)
+
+These raw SQL views exist in Snowflake for lightweight ad-hoc queries.
+For dashboards and AI analysis, use the **dbt mart tables** instead — they are
+richer, tested, and correctly joined.
 
 ### V_DAILY_AI_COST
-Daily cost aggregation by model and trigger source. Use for cost trend dashboards.
+Daily cost aggregation by model and trigger source.
 
 **Key columns:** `TRADE_DATE`, `MODEL`, `TRIGGERED_BY`, `api_call_count`, `total_tokens`, `total_cost_usd`, `avg_latency_ms`, `error_count`
 
 ### V_MONTHLY_AI_COST
-Monthly rollup. Use for budget tracking and invoicing review.
+Monthly rollup from `V_DAILY_AI_COST`. For budget tracking and invoicing review.
 
 **Key columns:** `month`, `MODEL`, `total_cost_usd`, `total_tokens`, `total_api_calls`
 
@@ -280,7 +288,7 @@ Tool usage statistics. Use to identify slow or failing tools.
 **Key columns:** `TOOL_NAME`, `total_calls`, `success_rate_pct`, `avg_duration_ms`, `max_duration_ms`
 
 ### V_RUN_HISTORY
-Full run history with match rate and cost. Primary view for operations dashboard.
+Run history with match rate and cost. Joins `RUN_EVENTS` to per-run AI cost.
 
 **Key columns:** `RUN_ID`, `TRADE_DATE`, `STATUS`, `match_rate_pct`, `BREAK_COUNT`, `HIGH_SEVERITY_COUNT`, `TOTAL_NOTIONAL_AT_RISK_USD`, `ai_cost_usd`, `DURATION_SECONDS`
 
@@ -291,14 +299,94 @@ Human-readable audit trail ordered by most recent.
 
 ---
 
-## Suggested Sigma / Basedash Dashboard Pages
+## dbt Semantic Layer
 
-| Page | Primary Table/View | Key Metrics |
+The dbt project at `dbt/` models all raw tables into a clean semantic layer.
+Run `dbt run` after each reconciliation to refresh the mart tables.
+
+### Staging Models (`RECON_DB.dbt_staging.*`)
+
+One model per raw table. Responsibilities: rename columns to snake_case, safe
+`coalesce` for nulls, cast types, add simple boolean derivations.
+
+| Model | Source table | Key additions |
 |---|---|---|
-| **Daily Summary** | `V_RUN_HISTORY` | Match rate %, break count, notional at risk, run status |
-| **Break Explorer** | `RESULTS.BREAKS` | Break list filterable by date/severity/type/counterparty |
-| **Position Impact** | `RESULTS.POSITION_IMPACT` | P&L at risk, cash impact, DV01 by instrument |
-| **AI Cost Monitor** | `V_DAILY_AI_COST` + `V_MONTHLY_AI_COST` | Daily/monthly spend, tokens, latency |
-| **Tool Performance** | `V_TOOL_PERFORMANCE` | Success rate, avg latency per tool |
-| **Audit Trail** | `V_USER_ACTIVITY` | Who did what, when |
-| **Break Trends** | `RESULTS.BREAKS` aggregated | Break rate over time by asset class |
+| `stg_recon_runs` | `RESULTS.RECON_RUNS` | `sla_met`, `match_rate_pct`, `run_duration_seconds`, `trade_month` |
+| `stg_breaks` | `RESULTS.BREAKS` | `is_claude_enhanced`, `enrichment_source` coalesced |
+| `stg_matched_trades` | `RESULTS.MATCHED_TRADES` | `is_exact_match` boolean |
+| `stg_position_impact` | `RESULTS.POSITION_IMPACT` | `total_financial_exposure_usd` (P&L + cash) |
+| `stg_ai_api_calls` | `OBSERVABILITY.AI_API_CALLS` | `call_succeeded`, `cost_per_1k_tokens`, `call_purpose` |
+| `stg_tool_calls` | `OBSERVABILITY.TOOL_CALLS` | `call_succeeded` boolean |
+| `stg_run_events` | `OBSERVABILITY.RUN_EVENTS` | `duration_minutes` |
+| `stg_user_activity` | `OBSERVABILITY.USER_ACTIVITY` | `occurred_date` |
+
+### Mart Models (`RECON_DB.dbt_marts.*`)
+
+Business-level fact tables materialised as Snowflake tables. These are the
+recommended source for all dashboards and AI-driven analysis.
+
+#### `fct_recon_runs`
+One row per run. Primary table for executive dashboards and run health monitoring.
+
+| Key column | Description |
+|---|---|
+| `run_outcome` | `CLEAN` / `BREAKS_FOUND` / `CRITICAL` / `FAILED` |
+| `sla_met` | True if run completed before 08:00 ET |
+| `match_rate_pct` | Matched trades as % of total (safely handles zero-trade days) |
+| `ai_cost_usd` | Total Claude API spend for the run |
+| `cost_per_break_usd` | AI spend / total breaks found |
+| `claude_enhanced_breaks` | Count of HIGH breaks enriched by Claude |
+
+#### `fct_breaks`
+One row per break, joined with position impact. Primary table for ops investigation.
+
+| Key column | Description |
+|---|---|
+| `enrichment_source` | `CLAUDE_ENHANCED` or `TEMPLATE_ONLY` |
+| `is_claude_enhanced` | Boolean: HIGH break enriched by Claude |
+| `pnl_impact_usd` | Mark-to-market P&L impact from position_impact |
+| `settlement_cash_impact_usd` | Cash funding impact |
+| `total_financial_exposure_usd` | P&L + cash impact combined |
+
+#### `fct_matched_trades`
+Matched trade pairs with run context. Use for settlement confirmation rate analysis.
+
+#### `fct_ai_usage`
+Per-run AI cost breakdown. Designed for cost monitoring dashboards.
+
+| Key column | Description |
+|---|---|
+| `cost_per_break_usd` | AI spend per break found |
+| `cost_per_high_break_usd` | AI spend per HIGH-severity break |
+| `cost_per_1m_notional_usd` | AI spend per $1M notional at risk |
+| `break_enrichment_calls` | Count of `BREAK_ENRICHMENT` purpose calls |
+| `calls_with_thinking` | Count of calls that used adaptive thinking |
+
+#### `fct_break_trends`
+90-day rolling break patterns. Powers historical pattern detection.
+
+| Key column | Description |
+|---|---|
+| `break_count_7d` | Breaks for this (counterparty, instrument, type) in last 7 days |
+| `break_count_30d` | Same, last 30 days |
+| `break_count_90d` | Same, last 90 days |
+| `recurrence_label` | `ISOLATED` / `OCCASIONAL` / `RECURRING` / `CHRONIC` |
+| `days_since_last_occurrence` | Days since the same pattern last appeared |
+| `pattern_lifespan_days` | Days between first and last occurrence |
+
+---
+
+## Suggested Dashboard Pages
+
+Use dbt mart tables as the primary source. Raw views are available for ad-hoc queries.
+
+| Page | Recommended source | Key Metrics |
+|---|---|---|
+| **Daily Run Summary** | `fct_recon_runs` | Match rate %, SLA status, break count by severity, run outcome |
+| **Break Explorer** | `fct_breaks` | Break list filterable by date/severity/type/counterparty; Claude vs template enrichment |
+| **Position Impact** | `fct_breaks` | P&L at risk, cash impact, DV01 by instrument |
+| **AI Cost Monitor** | `fct_ai_usage` | Cost per run, per break, per HIGH break, per $1M notional; token breakdown |
+| **Break Trends** | `fct_break_trends` | Recurrence labels, 30/90-day rolling counts, chronic counterparties |
+| **Matched Trade Log** | `fct_matched_trades` | Exact vs composite match rates; settlement confirmation tracking |
+| **Tool Performance** | `V_TOOL_PERFORMANCE` (raw view) | Success rate, avg latency per pipeline step |
+| **Audit Trail** | `V_USER_ACTIVITY` (raw view) | Who triggered what, when |

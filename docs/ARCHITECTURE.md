@@ -58,8 +58,26 @@
 │  RECON_DB.OBSERVABILITY.TOOL_CALLS    (tool invocations)           │
 │  RECON_DB.OBSERVABILITY.RUN_EVENTS    (lifecycle events)           │
 │  RECON_DB.OBSERVABILITY.USER_ACTIVITY (audit trail)                │
-│  RECON_DB.OBSERVABILITY.V_*           (5 dashboard views)          │
+│  RECON_DB.OBSERVABILITY.V_*           (5 raw SQL views)            │
 └──────────────────────────────────────────────────────────────────────┘
+           │
+           ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│              dbt SEMANTIC LAYER  (dbt run --select marts)           │
+│              Airflow downstream task, runs after pipeline           │
+│                                                                     │
+│  RECON_DB.dbt_staging.*  — 8 views, 1:1 with raw tables            │
+│    stg_recon_runs        stg_breaks          stg_matched_trades     │
+│    stg_position_impact   stg_ai_api_calls    stg_tool_calls         │
+│    stg_run_events        stg_user_activity                          │
+│                                                                     │
+│  RECON_DB.dbt_marts.*   — 5 Snowflake tables, dashboard-ready      │
+│    fct_recon_runs   → run health, SLA, match rate, AI cost/run     │
+│    fct_breaks       → ops investigation + position impact joined    │
+│    fct_matched_trades → settlement confirmation tracking            │
+│    fct_ai_usage     → cost per break / HIGH break / $1M notional   │
+│    fct_break_trends → 90-day rolling counterparty/instrument ptrns │
+└─────────────────────────────────────────────────────────────────────┘
            │
            ▼
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -173,6 +191,64 @@ The main recon job is never blocked or crashed by a tracking failure.
 
 ---
 
+## dbt Semantic Layer
+
+The `dbt/` project transforms raw Snowflake tables into a clean semantic layer
+that powers dashboards and AI analysis. It is completely independent of the
+Python pipeline — it reads from the same raw tables the pipeline writes to.
+
+```
+dbt/
+├── dbt_project.yml          ← Project config, materializations
+├── profiles.yml             ← Snowflake connection (uses same env vars as pipeline)
+├── packages.yml             ← dbt_utils
+└── models/
+    ├── staging/             ← Views: 1:1 with raw tables, clean + cast
+    │   ├── stg_recon_runs.sql      → adds sla_met, match_rate_pct
+    │   ├── stg_breaks.sql          → adds is_claude_enhanced, safe coalesces
+    │   ├── stg_matched_trades.sql  → adds is_exact_match
+    │   ├── stg_position_impact.sql → adds total_financial_exposure_usd
+    │   ├── stg_ai_api_calls.sql    → adds call_succeeded, cost_per_1k_tokens
+    │   ├── stg_tool_calls.sql      → adds call_succeeded
+    │   ├── stg_run_events.sql      → adds duration_minutes
+    │   └── stg_user_activity.sql   → adds occurred_date
+    └── marts/               ← Tables: business joins, materialised in Snowflake
+        ├── fct_recon_runs.sql      ← PRIMARY: run health, SLA, cost, outcomes
+        ├── fct_breaks.sql          ← PRIMARY: ops investigation + position impact
+        ├── fct_matched_trades.sql  ← settlement confirmation tracking
+        ├── fct_ai_usage.sql        ← AI cost attribution + ROI metrics
+        └── fct_break_trends.sql    ← 90-day rolling pattern detection
+```
+
+**Key derived fields added by dbt (not in raw tables):**
+
+| Field | Model | How derived |
+|---|---|---|
+| `sla_met` | `fct_recon_runs` | `completed_at` converted to ET, hour < 08:00 |
+| `run_outcome` | `fct_recon_runs` | `CLEAN / BREAKS_FOUND / CRITICAL / FAILED` |
+| `match_rate_pct` | `fct_recon_runs` | `matched / nullif(total_trades, 0) × 100` |
+| `ai_cost_usd` | `fct_recon_runs` | Sum of `AI_API_CALLS.cost_usd` per run |
+| `cost_per_break_usd` | `fct_ai_usage` | Total cost / breaks found |
+| `cost_per_high_break_usd` | `fct_ai_usage` | Total cost / HIGH breaks |
+| `is_claude_enhanced` | `fct_breaks` | `enrichment_source = 'CLAUDE_ENHANCED'` |
+| `total_financial_exposure_usd` | `fct_breaks` | P&L + settlement cash impact |
+| `recurrence_label` | `fct_break_trends` | `ISOLATED / OCCASIONAL / RECURRING / CHRONIC` |
+| `break_count_30d` | `fct_break_trends` | 30-day rolling window per counterparty/instrument/type |
+
+**Running dbt:**
+```bash
+cd dbt && dbt run          # refresh all models
+dbt run --select marts     # refresh marts only (< 60 seconds)
+dbt test                   # run schema + not_null + unique tests
+```
+
+Before first use, run the migration to add new columns to existing Snowflake tables:
+```bash
+snowsql -d RECON_DB -f sql/migrations/001_add_enrichment_source_and_call_purpose.sql
+```
+
+---
+
 ## Data Flow — Detailed
 
 ```
@@ -189,12 +265,13 @@ The main recon job is never blocked or crashed by a tracking failure.
    Accepts: match output JSON
    Returns: { breaks: [...], summary: { by_severity, total_notional } }
    Each break: all fields of BreakRecord EXCEPT ai_explanation, recommended_action
-   Those fields are filled in by Claude after this tool returns.
 
-4. CLAUDE ENRICHMENT (inside reconciliation_agent.py tool loop)
-   Claude reads the breaks list and adds:
-     ai_explanation      → plain English per break
-     recommended_action  → specific next step for ops
+4. ENRICH (break_enricher.py → Claude)
+   4a. enrich_breaks_locally(): deterministic templates for ALL breaks
+       Sets enrichment_source='TEMPLATE_ONLY' on every break
+   4b. _enrich_with_claude(): single API call (call_purpose='BREAK_ENRICHMENT')
+       HIGH breaks only — sets enrichment_source='CLAUDE_ENHANCED' on response
+       Claude adds narrative, key themes, and immediate actions
 
 5. POSITION IMPACT (position_impact.py)
    Accepts: enriched breaks_json, trade_date
