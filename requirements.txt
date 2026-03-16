@@ -33,8 +33,10 @@ holidays>=0.46               # Canadian federal + provincial holiday calendar
 # =============================================================================
 # Airflow (only needed on the Airflow worker, not in local dev)
 # Comment out if running locally without Airflow
+# pendulum is bundled with Airflow — no need to install separately on the worker
 # =============================================================================
 # apache-airflow>=2.8.0
+# pendulum>=3.0.0
 
 # =============================================================================
 # Dev / testing
