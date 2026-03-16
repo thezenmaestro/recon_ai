@@ -9,6 +9,8 @@ from email.mime.text import MIMEText
 
 import yaml
 
+from src.notifications.retry import TransientError, retry_with_backoff
+
 logger = logging.getLogger(__name__)
 
 _ROUTING_PATH = os.path.join(os.path.dirname(__file__), "../../config/alert_routing.yaml")
@@ -16,6 +18,9 @@ with open(_ROUTING_PATH) as _f:
     _ROUTING = yaml.safe_load(_f)
 
 _EMAIL_FMT = _ROUTING.get("notification_formatting", {}).get("email", {})
+
+_RETRY_ATTEMPTS = 3
+_RETRY_BASE_DELAY = 2.0   # SMTP servers tolerate longer gaps than HTTP
 
 
 def send_email(to: list[str], subject: str, body: str) -> None:
@@ -69,12 +74,27 @@ def send_email(to: list[str], subject: str, body: str) -> None:
     """
     msg.attach(MIMEText(html_body, "html"))
 
-    try:
-        with smtplib.SMTP(smtp_host, smtp_port) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(smtp_user, smtp_password)
-            server.sendmail(from_addr, to, msg.as_string())
-        logger.info("Email alert sent to %s", to)
-    except Exception as e:
-        logger.error("Email alert to %s failed: %s", to, e, exc_info=True)
+    raw_message = msg.as_string()
+
+    def _send() -> None:
+        try:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
+                server.ehlo()
+                server.starttls()
+                server.login(smtp_user, smtp_password)
+                server.sendmail(from_addr, to, raw_message)
+        except smtplib.SMTPServerDisconnected as exc:
+            raise TransientError(f"SMTP server disconnected: {exc}") from exc
+        except smtplib.SMTPConnectError as exc:
+            raise TransientError(f"Could not connect to SMTP server: {exc}") from exc
+        except smtplib.SMTPException as exc:
+            # Authentication failures etc. are not retryable
+            raise
+
+    retry_with_backoff(
+        _send,
+        attempts=_RETRY_ATTEMPTS,
+        base_delay=_RETRY_BASE_DELAY,
+        label=f"Email alert to {to}",
+    )
+    logger.info("Email alert sent to %s", to)
