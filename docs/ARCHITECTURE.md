@@ -2,99 +2,30 @@
 
 ## System Overview
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        AIRFLOW / CLI TRIGGER                        │
-│              trade_reconciliation_nightly (daily 06:00 ET)          │
-└────────────────────────────────┬────────────────────────────────────┘
-                                 │
-                                 ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                    reconciliation_agent.py                          │
-│                                                                     │
-│   Hard-coded Python pipeline (steps 1–7 run in fixed order).       │
-│   Claude is NOT the orchestrator — Python calls each step directly. │
-│                                                                     │
-│   1. load_booked_trades()          → Python (data_loader.py)        │
-│   2. load_executed_transactions()  → Python (data_loader.py)        │
-│   3. match_transactions()          → Python (matcher.py)            │
-│   4. classify_breaks()             → Python (break_classifier.py)   │
-│      enrich_breaks_locally()       → Python templates (all breaks)  │
-│      _enrich_with_claude()         → Claude Opus 4.6 ← ONE API CALL│
-│                                      (HIGH breaks only, skipped if  │
-│                                       no HIGH breaks exist)          │
-│   5. calculate_position_impact()   → Python (position_impact.py)    │
-│   6. write_matched_trades() / ...  → Python (reporter.py)           │
-│   7. route_alerts()                → Python (alert_router.py)        │
-└──────────────┬──────────────────────────────────────┬─────────────┘
-               │                                      │
-               ▼                                      ▼
-┌──────────────────────────┐           ┌──────────────────────────────┐
-│   src/tools/ (Python)    │           │   observability/ (independent)│
-│                          │           │                              │
-│  data_loader.py          │           │  TrackedAnthropic wrapper    │
-│  matcher.py              │           │  captures on every API call: │
-│  break_classifier.py     │           │  • tokens / cost / latency  │
-│  position_impact.py      │           │  • tool names + duration    │
-│  reporter.py             │           │  • run lifecycle events     │
-│                          │           │  • user activity            │
-│  No AI imports.          │           │                              │
-│  Fully unit-testable.    │           │  Writes to OBSERVABILITY     │
-└──────────┬───────────────┘           │  schema. Silent on failure.  │
-           │                           └──────────────────────────────┘
-           ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                          SNOWFLAKE                                  │
-│                                                                     │
-│  TRADES_DB.OMS.BOOKED_TRADES          (read only — Source A)       │
-│  EXECUTIONS_DB.CONFIRMS.EXECUTED_TRANSACTIONS (read only — B)      │
-│                                                                     │
-│  RECON_DB.RESULTS.RECON_RUNS          (run metadata)               │
-│  RECON_DB.RESULTS.MATCHED_TRADES      (confirmed matches)          │
-│  RECON_DB.RESULTS.BREAKS              (breaks + AI explanations)   │
-│  RECON_DB.RESULTS.POSITION_IMPACT     (P&L, cash, risk)            │
-│                                                                     │
-│  RECON_DB.OBSERVABILITY.AI_API_CALLS         (Claude usage per call)   │
-│  RECON_DB.OBSERVABILITY.TOOL_CALLS           (tool invocations)        │
-│  RECON_DB.OBSERVABILITY.RUN_EVENTS           (lifecycle events)        │
-│  RECON_DB.OBSERVABILITY.USER_ACTIVITY        (audit trail)             │
-│  RECON_DB.OBSERVABILITY.DATA_QUALITY_METRICS (data load health)        │
-│  RECON_DB.OBSERVABILITY.NOTIFICATION_DELIVERIES (alert dispatch log)   │
-│  RECON_DB.OBSERVABILITY.V_*                  (7 raw SQL views)         │
-└──────────────────────────────────────────────────────────────────────┘
-           │
-           ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│              dbt SEMANTIC LAYER  (dbt run --select marts)           │
-│              Airflow downstream task, runs after pipeline           │
-│                                                                     │
-│  RECON_DB.dbt_staging.*  — 8 views, 1:1 with raw tables            │
-│    stg_recon_runs        stg_breaks          stg_matched_trades     │
-│    stg_position_impact   stg_ai_api_calls    stg_tool_calls         │
-│    stg_run_events        stg_user_activity                          │
-│                                                                     │
-│  RECON_DB.dbt_marts.*   — 5 Snowflake tables, dashboard-ready      │
-│    fct_recon_runs   → run health, SLA, match rate, AI cost/run     │
-│    fct_breaks       → ops investigation + position impact joined    │
-│    fct_matched_trades → settlement confirmation tracking            │
-│    fct_ai_usage     → cost per break / HIGH break / $1M notional   │
-│    fct_break_trends → 90-day rolling counterparty/instrument ptrns │
-└─────────────────────────────────────────────────────────────────────┘
-           │
-           ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                   NOTIFICATIONS (parallel)                          │
-│                                                                     │
-│   Slack webhook → #recon-ops / #recon-{asset} / #recon-risk        │
-│   SMTP email    → ops team / desk heads / risk / management        │
-│   Teams webhook → ops / risk / management channels                 │
-│                                                                     │
-│   Routing: tiered by break severity × instrument type              │
-│   LOW  ($0–10K)  → ops only                                        │
-│   MED  ($10–100K)→ ops + desk head                                 │
-│   HIGH ($100K+)  → ops + desk head + risk + (management for bonds) │
-└─────────────────────────────────────────────────────────────────────┘
-```
+**Trigger:** Airflow DAG `trade_reconciliation_nightly` (daily 06:00 ET) or `python main.py --date`
+
+**Pipeline** — hard-coded Python in `reconciliation_agent.py` (Claude is NOT the orchestrator):
+1. `load_booked_trades()` / `load_executed_transactions()` — `data_loader.py`
+2. `match_transactions()` — `matcher.py` (exact key → composite key)
+3. `classify_breaks()` + `enrich_breaks_locally()` — `break_classifier.py` (Python templates, all breaks)
+4. `_enrich_with_claude()` — **one** Claude Opus 4.6 API call (HIGH breaks only; skipped if none)
+5. `calculate_position_impact()` — `position_impact.py`
+6. `write_*()` — `reporter.py` → Snowflake RECON_DB.RESULTS.*
+7. `route_alerts()` — `alert_router.py` → Slack / Email / Teams
+
+**Observability** (`observability/` — fully independent of `src/`):
+- `TrackedAnthropic` wrapper captures tokens, cost, latency, tool calls, run events
+- `data_loader` and `alert_router` emit data quality and delivery records directly
+- All writes fire-and-forget (try/except → WARNING); never crashes the main job
+
+**Snowflake layout:**
+- `TRADES_DB.OMS.BOOKED_TRADES` / `EXECUTIONS_DB.CONFIRMS.EXECUTED_TRANSACTIONS` — read only
+- `RECON_DB.RESULTS.*` — pipeline outputs (4 tables)
+- `RECON_DB.OBSERVABILITY.*` — tracking (6 tables, 7 views)
+- `RECON_DB.dbt_marts.*` — 5 dashboard-ready fact tables built by dbt
+
+**Notifications** (tiered by severity × asset class):
+- LOW ($0–10K) → ops only · MEDIUM ($10–100K) → ops + desk head · HIGH ($100K+) → + risk (+ mgmt for bonds)
 
 ---
 
