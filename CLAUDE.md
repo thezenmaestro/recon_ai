@@ -43,15 +43,21 @@ recon_ai/
 ├── README.md                      ← Human onboarding
 │
 ├── config/                        ← ALL DOMAIN KNOWLEDGE LIVES HERE
-│   ├── system_prompt.md           # Claude's domain expertise prompt
-│   │                              # ADD: counterparty aliases, data quirks,
-│   │                              # market calendars, cutoff times
-│   ├── business_rules.yaml        # Tolerances per asset class, break severity thresholds
-│   │                              # ADD: new instrument types, new tolerance values
+│   │                              Full reference: docs/CONFIG_GUIDE.md
+│   ├── business_rules.yaml        # matching.tolerances (per asset class)
+│   │                              # matching.counterparty_normalization (case, suffixes)
+│   │                              # breaks.types + breaks.severity_thresholds
+│   │                              # position.dv01_config, fx_rate_fallback
+│   │                              # cli.exit_codes (Airflow/monitoring integration)
 │   ├── field_mappings.yaml        # Snowflake DB/schema/table/column names
-│   │                              # EDIT THIS FIRST when tables change
-│   └── alert_routing.yaml        # Slack channels, email groups, Teams webhooks,
-│                                  # routing matrix (severity × asset class)
+│   │                              # fx_rates → points to FX rate source table
+│   │                              # EDIT THIS FIRST when source tables change
+│   ├── alert_routing.yaml         # channels (Slack/email/Teams aliases + URLs)
+│   │                              # routing_matrix (severity × asset class → who gets what)
+│   │                              # alert_settings (digest mode, AI explanation toggle)
+│   │                              # notification_formatting (bot name, colours, footer)
+│   └── system_prompt.md           # Free-form domain knowledge fed to Claude
+│                                  # ADD: counterparty aliases, data quirks, calendar
 │
 ├── src/                           ← MAIN RECON PIPELINE — independent of observability
 │   ├── agents/
@@ -114,7 +120,7 @@ recon_ai/
 
 | File | Line area | What to implement |
 |---|---|---|
-| [src/tools/position_impact.py](src/tools/position_impact.py) | `_get_fx_rate()` | Real Snowflake FX rate lookup (MARKET_DATA_DB.RATES.FX_RATES_EOD) |
+| [src/tools/position_impact.py](src/tools/position_impact.py) | `_get_fx_rate()` | Real Snowflake FX rate lookup — config is wired in `field_mappings.yaml → fx_rates`, uncomment the SQL block once MARKET_DATA_DB is live |
 | [src/tools/position_impact.py](src/tools/position_impact.py) | `_get_last_price()` | Last known price lookup from Snowflake market data |
 | [src/tools/reporter.py](src/tools/reporter.py) | `finalise_recon_run()` | SQL UPDATE uses `execute_ddl` but params not bound — fix to use parameterised UPDATE |
 | [config/system_prompt.md](config/system_prompt.md) | Counterparty Aliases section | Fill in real counterparty alias mappings |
@@ -193,7 +199,9 @@ python main.py --date 2024-01-15
 **Add a new instrument type:**
 1. Add tolerance block to `config/business_rules.yaml` under `matching.tolerances`
 2. Add risk metrics to `position.compute_risk_metrics`
-3. No code changes needed
+3. Add alert routing to `config/alert_routing.yaml` under `routing_matrix`
+4. Add to `InstrumentType` enum in `src/data/models.py`
+5. No other code changes needed
 
 **Add a new break type:**
 1. Add to `BreakType` enum in `src/data/models.py`

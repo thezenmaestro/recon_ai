@@ -89,12 +89,15 @@ cp .env.example .env
 
 Edit these four files before running anything:
 
-| File | What to fill in |
-|---|---|
-| [config/field_mappings.yaml](config/field_mappings.yaml) | Your actual Snowflake DB / schema / table / column names |
-| [config/system_prompt.md](config/system_prompt.md) | Counterparty aliases, data quirks, market calendar, cutoff time |
-| [config/business_rules.yaml](config/business_rules.yaml) | Tolerance thresholds per asset class (suggested defaults are provided) |
-| [config/alert_routing.yaml](config/alert_routing.yaml) | Slack channels, email addresses, Teams webhook URLs |
+| File | What to fill in | Full reference |
+|---|---|---|
+| [config/field_mappings.yaml](config/field_mappings.yaml) | Snowflake DB / schema / table / column names | [CONFIG_GUIDE.md → field_mappings](docs/CONFIG_GUIDE.md#configfield_mappingsyaml) |
+| [config/business_rules.yaml](config/business_rules.yaml) | Tolerances, severity thresholds, risk metrics | [CONFIG_GUIDE.md → business_rules](docs/CONFIG_GUIDE.md#configbusiness_rulesyaml) |
+| [config/alert_routing.yaml](config/alert_routing.yaml) | Slack channels, email addresses, Teams webhooks, bot formatting | [CONFIG_GUIDE.md → alert_routing](docs/CONFIG_GUIDE.md#configalert_routingyaml) |
+| [config/system_prompt.md](config/system_prompt.md) | Counterparty aliases, data quirks, market calendar | [CONFIG_GUIDE.md → system_prompt](docs/CONFIG_GUIDE.md#configsystem_promptmd) |
+
+See [docs/CONFIG_GUIDE.md](docs/CONFIG_GUIDE.md) for field-by-field explanations,
+common tasks, and a pre-flight checklist.
 
 ### 4. Create Snowflake result tables
 
@@ -155,54 +158,47 @@ airflow dags trigger trade_reconciliation_nightly --conf '{"trade_date": "2024-0
 
 ## Configuration Reference
 
-### Business Rules (`config/business_rules.yaml`)
+All business logic lives in `config/` — no Python changes needed for routine
+adjustments. See **[docs/CONFIG_GUIDE.md](docs/CONFIG_GUIDE.md)** for the
+complete field-by-field reference. Quick summary below.
 
-Controls matching tolerances per asset class and break severity thresholds.
+### `config/business_rules.yaml` — Tolerances and thresholds
 
-```yaml
-matching:
-  tolerances:
-    EQUITY:
-      price_pct: 0.001      # 0.1% price tolerance
-      qty_abs: 0            # exact quantity match
-      date_days: 0          # exact settlement date
+| Section | Controls |
+|---|---|
+| `matching.tolerances` | Per-asset-class price/qty/date tolerance for matching |
+| `matching.counterparty_normalization` | Case, whitespace, legal suffix stripping |
+| `breaks.types` | Break type definitions and auto-severity overrides |
+| `breaks.severity_thresholds` | USD notional bands for LOW / MEDIUM / HIGH |
+| `position.dv01_config` | DV01 estimation constants for bonds and derivatives |
+| `position.fx_rate_fallback` | Rate used when FX lookup is unavailable |
+| `position.compute_risk_metrics` | Which risk metrics to compute per asset class |
+| `cli.exit_codes` | Process exit codes by run status (for Airflow/monitoring) |
 
-breaks:
-  severity_thresholds:
-    LOW:    { max_notional: 10000 }       # < $10K → ops only
-    MEDIUM: { min_notional: 10000,
-              max_notional: 100000 }      # $10K–$100K → ops + desk head
-    HIGH:   { min_notional: 100000 }      # > $100K → ops + desk head + risk
-```
+### `config/field_mappings.yaml` — Snowflake coordinates
 
-### Field Mappings (`config/field_mappings.yaml`)
+Maps internal field names to your actual Snowflake databases, schemas, tables,
+and columns. Also configures the FX rate source table.
 
-Maps your Snowflake columns to the internal field names the pipeline uses.
+**Every `← REPLACE` comment marks a value you must change before the first run.**
 
-```yaml
-trades:
-  snowflake:
-    database: TRADES_DB       # ← your actual database name
-    schema: OMS
-    table: BOOKED_TRADES
-  columns:
-    trade_id: TRADE_ID        # ← your actual column name
-    isin: ISIN
-    # ... etc
-```
+### `config/alert_routing.yaml` — Notification routing
 
-### Alert Routing (`config/alert_routing.yaml`)
+| Section | Controls |
+|---|---|
+| `channels.slack` | Channel aliases → Slack channel names |
+| `channels.email` | Recipient group aliases → email address lists |
+| `channels.teams` | Channel aliases → Teams webhook URLs |
+| `routing_matrix` | Who gets notified for each severity × asset class combination |
+| `alert_settings` | Digest mode, max breaks shown, AI explanation toggle |
+| `notification_formatting` | Bot name, emoji, email colour, Teams card style |
 
-Defines who gets notified for each severity level and asset class combination.
+### `config/system_prompt.md` — Claude's domain knowledge
 
-```yaml
-routing_matrix:
-  EQUITY:
-    HIGH:
-      slack: [ops_general, equities_desk, risk_management]
-      email: [ops_team, equities_desk_head, risk_management]
-      teams: [ops_channel, risk_channel]
-```
+Free-form text read directly into Claude's system prompt. Fill in:
+- Counterparty aliases (e.g. "GS" = "Goldman Sachs International")
+- Known data quirks per broker or system
+- Market calendar and end-of-day cutoff time
 
 ---
 
@@ -247,6 +243,7 @@ No other code changes needed.
 |---|---|---|
 | [CLAUDE.md](CLAUDE.md) | AI (auto-loaded) | Full project context for AI sessions |
 | [README.md](README.md) | All | Setup, usage, configuration reference |
+| [docs/CONFIG_GUIDE.md](docs/CONFIG_GUIDE.md) | Ops / Analysts | All config fields explained with examples and common tasks |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Engineers | System design, data flow, design decisions |
 | [docs/RUNBOOK.md](docs/RUNBOOK.md) | Operations | How to handle alerts, breaks, and incidents |
 | [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md) | Analysts / Engineers | All Snowflake tables, views, and fields |
