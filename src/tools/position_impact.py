@@ -44,29 +44,9 @@ def _get_fx_rate(from_currency: str, to_currency: str = "USD", trade_date: str |
     fx_cfg = MAPPINGS.get("fx_rates", {})
 
     if fx_cfg.get("use_snowflake_table", False):
-        # ── Snowflake FX lookup (uncomment when MARKET_DATA_DB is live) ─────
-        # db    = fx_cfg["snowflake"]["database"]
-        # schema = fx_cfg["snowflake"]["schema"]
-        # table  = fx_cfg["snowflake"]["table"]
-        # date_col   = fx_cfg["snowflake"]["date_column"]
-        # from_col   = fx_cfg["snowflake"]["from_currency_column"]
-        # to_col     = fx_cfg["snowflake"]["to_currency_column"]
-        # rate_col   = fx_cfg["snowflake"]["rate_column"]
-        # rate_date  = trade_date or str(date.today())
-        #
-        # sql = (
-        #     f"SELECT {rate_col} FROM {db}.{schema}.{table} "
-        #     f"WHERE {from_col} = %s AND {to_col} = %s AND {date_col} = %s"
-        # )
-        # try:
-        #     from src.data.snowflake_connector import query_to_df, results_conn
-        #     with results_conn() as conn:
-        #         df = query_to_df(conn, sql, (from_currency.upper(), to_currency.upper(), rate_date))
-        #     if not df.empty:
-        #         return float(df.iloc[0, 0])
-        # except Exception as exc:
-        #     print(f"[FX] Snowflake lookup failed ({from_currency}→{to_currency}): {exc}")
-        pass  # Remove when implementing the block above
+        # TODO: implement Snowflake FX lookup using fx_cfg["snowflake"] coordinates.
+        # See field_mappings.yaml → fx_rates and CLAUDE.md → Known TODOs.
+        pass
 
     logger.warning(
         "FX rate lookup not implemented — using fallback rate %.4f for %s→%s. "

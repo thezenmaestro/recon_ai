@@ -104,8 +104,10 @@ def route_alerts(breaks_json: str, run_id: str, trade_date: str) -> str:
 
 def _get_routing(instrument_type: str, severity: str) -> dict:
     matrix = ROUTING.get("routing_matrix", {})
+    defaults = ROUTING.get("routing_defaults", {})
     instrument_routing = matrix.get(instrument_type, matrix.get("DEFAULT", {}))
-    return instrument_routing.get(severity, {})
+    # Per-asset severity entry takes precedence; fall back to routing_defaults
+    return instrument_routing.get(severity, defaults.get(severity, {}))
 
 
 def _all_channel_keys(routing: dict) -> list[str]:

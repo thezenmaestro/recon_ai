@@ -44,21 +44,27 @@ channels:
       management_channel: "https://yourfirm.webhook.office.com/..." # ← REPLACE
 
 # =============================================================================
-# ROUTING MATRIX — by severity + asset class
+# ROUTING DEFAULTS — applied when a severity level has no per-asset entry
 # =============================================================================
-# Each entry defines: who gets notified, via which channel, for what condition.
-#
+# LOW is identical for every asset class, so it lives here only.
+# Add or override any severity level per asset class in routing_matrix below.
+# =============================================================================
+routing_defaults:
+  LOW:
+    slack: [ops_general]
+    email: [ops_team]
+    teams: [ops_channel]
+
+# =============================================================================
+# ROUTING MATRIX — desk-specific overrides by severity + asset class
+# =============================================================================
 # Severity levels (from business_rules.yaml):
-#   LOW    : notional < $10K
+#   LOW    : notional < $10K   → inherited from routing_defaults above
 #   MEDIUM : $10K – $100K
 #   HIGH   : > $100K  OR  break_type = UNEXECUTED (always HIGH)
 # =============================================================================
 routing_matrix:
   EQUITY:
-    LOW:
-      slack: [ops_general]
-      email: [ops_team]
-      teams: [ops_channel]
     MEDIUM:
       slack: [ops_general, equities_desk]
       email: [ops_team, equities_desk_head]
@@ -69,10 +75,6 @@ routing_matrix:
       teams: [ops_channel, risk_channel]
 
   FX:
-    LOW:
-      slack: [ops_general]
-      email: [ops_team]
-      teams: [ops_channel]
     MEDIUM:
       slack: [ops_general, fx_desk]
       email: [ops_team, fx_desk_head]
@@ -83,10 +85,6 @@ routing_matrix:
       teams: [ops_channel, risk_channel]
 
   BOND:
-    LOW:
-      slack: [ops_general]
-      email: [ops_team]
-      teams: [ops_channel]
     MEDIUM:
       slack: [ops_general, bonds_desk]
       email: [ops_team, bonds_desk_head]
@@ -97,10 +95,6 @@ routing_matrix:
       teams: [ops_channel, risk_channel, management_channel]
 
   DERIVATIVE:
-    LOW:
-      slack: [ops_general]
-      email: [ops_team]
-      teams: [ops_channel]
     MEDIUM:
       slack: [ops_general, derivatives_desk]
       email: [ops_team, derivatives_desk_head]
@@ -111,10 +105,6 @@ routing_matrix:
       teams: [ops_channel, risk_channel, management_channel]
 
   DEFAULT:              # Catch-all for unrecognised instrument types
-    LOW:
-      slack: [ops_general]
-      email: [ops_team]
-      teams: [ops_channel]
     MEDIUM:
       slack: [ops_general, risk_management]
       email: [ops_team, risk_management]
