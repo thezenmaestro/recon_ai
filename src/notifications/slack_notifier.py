@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 
 import requests
 import yaml
+
+logger = logging.getLogger(__name__)
 
 _ROUTING_PATH = os.path.join(os.path.dirname(__file__), "../../config/alert_routing.yaml")
 with open(_ROUTING_PATH) as _f:
@@ -29,7 +32,7 @@ def send_slack(channel: str, message: str) -> None:
     """
     webhook_url = os.environ.get("SLACK_WEBHOOK_URL", "")
     if not webhook_url:
-        print(f"[Slack] SLACK_WEBHOOK_URL not set. Skipping alert to {channel}.")
+        logger.warning("SLACK_WEBHOOK_URL not set; skipping alert to %s", channel)
         return
 
     payload = {
@@ -46,6 +49,9 @@ def send_slack(channel: str, message: str) -> None:
     )
 
     if response.status_code != 200:
-        print(f"[Slack] Failed to send alert. Status: {response.status_code} | {response.text}")
+        logger.error(
+            "Slack alert to %s failed — HTTP %d: %s",
+            channel, response.status_code, response.text,
+        )
     else:
-        print(f"[Slack] Alert sent to {channel}.")
+        logger.info("Slack alert sent to %s", channel)

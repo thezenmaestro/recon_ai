@@ -12,8 +12,11 @@ On a clean day (zero breaks) no API call is made at all.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 from observability.tracker import TrackedAnthropic
 from observability.models import RunEvent
@@ -110,7 +113,7 @@ def run_reconciliation(
         "status": "RUNNING",
     })
 
-    print(f"[{run_id}] Starting reconciliation for {trade_date}...")
+    logger.info("[%s] Starting reconciliation for %s", run_id, trade_date)
 
     sink = get_sink()
     run_start = datetime.utcnow()
@@ -126,34 +129,37 @@ def run_reconciliation(
 
     try:
         # ── Step 1: Load data ─────────────────────────────────────────────────
-        print(f"[{run_id}] Loading trades and executions...")
+        logger.info("[%s] Loading trades and executions", run_id)
         trades_json = load_booked_trades(trade_date)
         executions_json = load_executed_transactions(trade_date)
 
         trades_count = len(json.loads(trades_json).get("trades", []))
         exec_count = len(json.loads(executions_json).get("executions", []))
-        print(f"[{run_id}] Loaded {trades_count:,} trades, {exec_count:,} executions.")
+        logger.info("[%s] Loaded %d trades, %d executions", run_id, trades_count, exec_count)
 
         # ── Step 2: Match ─────────────────────────────────────────────────────
-        print(f"[{run_id}] Matching...")
+        logger.info("[%s] Matching", run_id)
         match_json = match_transactions(trades_json, executions_json)
         match_data = json.loads(match_json)
         matched_count = len(match_data.get("matched", []))
         unmatched_count = len(match_data.get("unmatched_trades", []))
-        print(f"[{run_id}] {matched_count:,} matched, {unmatched_count:,} unmatched.")
+        logger.info("[%s] %d matched, %d unmatched", run_id, matched_count, unmatched_count)
 
         # ── Step 3: Classify breaks ───────────────────────────────────────────
-        print(f"[{run_id}] Classifying breaks...")
+        logger.info("[%s] Classifying breaks", run_id)
         breaks_json = classify_breaks(match_json)
         breaks_data = json.loads(breaks_json)
         all_breaks = breaks_data.get("breaks", [])
         brk_summary = breaks_data.get("summary", {})
         total_breaks = brk_summary.get("total_breaks", 0)
         by_severity = brk_summary.get("by_severity", {})
-        print(f"[{run_id}] {total_breaks} breaks — "
-              f"HIGH: {by_severity.get('HIGH', 0)}, "
-              f"MEDIUM: {by_severity.get('MEDIUM', 0)}, "
-              f"LOW: {by_severity.get('LOW', 0)}")
+        logger.info(
+            "[%s] %d breaks — HIGH: %d, MEDIUM: %d, LOW: %d",
+            run_id, total_breaks,
+            by_severity.get("HIGH", 0),
+            by_severity.get("MEDIUM", 0),
+            by_severity.get("LOW", 0),
+        )
 
         # ── Step 4: Enrich breaks ─────────────────────────────────────────────
         # 4a. Template enrichment — all breaks, no API call
@@ -186,17 +192,17 @@ def run_reconciliation(
         enriched_breaks_json = json.dumps(breaks_data)
 
         # ── Step 5: Position impact ───────────────────────────────────────────
-        print(f"[{run_id}] Calculating position impact...")
+        logger.info("[%s] Calculating position impact", run_id)
         impacts_json = calculate_position_impact(enriched_breaks_json, trade_date)
 
         # ── Step 6: Write results ─────────────────────────────────────────────
-        print(f"[{run_id}] Writing results to Snowflake...")
+        logger.info("[%s] Writing results to Snowflake", run_id)
         write_matched_trades(match_json, run_id)
         write_breaks(enriched_breaks_json)
         write_position_impacts(impacts_json)
 
         # ── Step 7: Route alerts ──────────────────────────────────────────────
-        print(f"[{run_id}] Routing alerts...")
+        logger.info("[%s] Routing alerts", run_id)
         route_alerts(enriched_breaks_json, run_id, trade_date)
 
         # ── Build summary ─────────────────────────────────────────────────────
@@ -223,13 +229,13 @@ def run_reconciliation(
             duration_seconds=round(duration, 2),
         ))
 
-        print(f"[{run_id}] Done. Status: {summary.overall_status}")
+        logger.info("[%s] Done. Status: %s", run_id, summary.overall_status)
         return summary
 
     except Exception as e:
         error_msg = str(e)
         duration = (datetime.utcnow() - run_start).total_seconds()
-        print(f"[{run_id}] FAILED: {error_msg}")
+        logger.error("[%s] FAILED: %s", run_id, error_msg, exc_info=True)
         finalise_recon_run(run_id, "FAILED", error_message=error_msg)
         sink.log_run_event(RunEvent(
             run_id=run_id,
@@ -260,10 +266,10 @@ def _enrich_with_claude(
     and produce the cross-break narrative. Returns None on clean runs.
     """
     if not high_breaks:
-        print(f"[{run_id}] No HIGH severity breaks — skipping Claude API call.")
+        logger.info("[%s] No HIGH severity breaks — skipping Claude API call", run_id)
         return None
 
-    print(f"[{run_id}] Calling Claude to enhance {len(high_breaks)} HIGH break(s)...")
+    logger.info("[%s] Calling Claude to enhance %d HIGH break(s)", run_id, len(high_breaks))
 
     prompt = build_enrichment_prompt(high_breaks, all_breaks, match_stats, trade_date)
 
@@ -287,8 +293,11 @@ def _enrich_with_claude(
             try:
                 return json.loads(block.text)
             except json.JSONDecodeError:
-                print(f"[{run_id}] Warning: Claude enrichment response was not valid JSON. "
-                      "Using template explanations for all HIGH breaks.")
+                logger.warning(
+                    "[%s] Claude enrichment response was not valid JSON; "
+                    "using template explanations for all HIGH breaks",
+                    run_id,
+                )
                 return None
 
     return None

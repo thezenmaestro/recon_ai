@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 
 import requests
 import yaml
+
+logger = logging.getLogger(__name__)
 
 _ROUTING_PATH = os.path.join(os.path.dirname(__file__), "../../config/alert_routing.yaml")
 with open(_ROUTING_PATH) as _f:
@@ -23,7 +26,7 @@ def send_teams(webhook_url: str, message: str) -> None:
         message: Plain text message (will be rendered in a Teams card)
     """
     if not webhook_url or webhook_url.startswith("https://yourfirm"):
-        print("[Teams] Webhook URL not configured. Skipping alert.")
+        logger.warning("Teams webhook URL not configured; skipping alert")
         return
 
     # Teams uses Adaptive Cards — format as a simple MessageCard
@@ -47,6 +50,9 @@ def send_teams(webhook_url: str, message: str) -> None:
     )
 
     if response.status_code not in (200, 204):
-        print(f"[Teams] Failed to send alert. Status: {response.status_code} | {response.text}")
+        logger.error(
+            "Teams alert failed — HTTP %d: %s",
+            response.status_code, response.text,
+        )
     else:
-        print("[Teams] Alert sent.")
+        logger.info("Teams alert sent")

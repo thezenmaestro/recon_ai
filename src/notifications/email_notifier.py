@@ -1,12 +1,15 @@
 """Email notifications via SMTP."""
 from __future__ import annotations
 
+import logging
 import os
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 _ROUTING_PATH = os.path.join(os.path.dirname(__file__), "../../config/alert_routing.yaml")
 with open(_ROUTING_PATH) as _f:
@@ -38,7 +41,7 @@ def send_email(to: list[str], subject: str, body: str) -> None:
     from_addr = os.environ.get("EMAIL_FROM", smtp_user)
 
     if not smtp_host or not smtp_user:
-        print(f"[Email] SMTP not configured. Skipping alert to {to}.")
+        logger.warning("SMTP not configured; skipping alert to %s", to)
         return
 
     msg = MIMEMultipart("alternative")
@@ -72,6 +75,6 @@ def send_email(to: list[str], subject: str, body: str) -> None:
             server.starttls()
             server.login(smtp_user, smtp_password)
             server.sendmail(from_addr, to, msg.as_string())
-        print(f"[Email] Alert sent to {to}.")
+        logger.info("Email alert sent to %s", to)
     except Exception as e:
-        print(f"[Email] Failed to send alert: {e}")
+        logger.error("Email alert to %s failed: %s", to, e, exc_info=True)

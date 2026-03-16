@@ -11,11 +11,14 @@ pre-defined views for common dashboard queries.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime
 from typing import Any
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 from observability.models import (
     AIAPICallEvent,
@@ -249,7 +252,7 @@ class ObservabilitySink:
             )
         except Exception as e:
             # Never crash the main job over an observability write
-            print(f"[Observability] WARNING: failed to write to {table}: {e}")
+            logger.warning("Observability write to %s failed: %s", table, e)
 
     # ── Public write methods ─────────────────────────────────────────────────
 

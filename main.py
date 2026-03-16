@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 from datetime import date, timedelta
@@ -20,6 +21,19 @@ with open(_RULES_PATH) as _f:
     _RULES = yaml.safe_load(_f)
 
 _EXIT_CODES: dict = _RULES.get("cli", {}).get("exit_codes", {"CRITICAL": 1})
+
+
+def _configure_logging() -> None:
+    """Configure structured logging for the whole process."""
+    log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+    logging.basicConfig(
+        level=getattr(logging, log_level, logging.INFO),
+        format="%(asctime)s %(levelname)-8s %(name)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%SZ",
+    )
+    # Quieten noisy third-party loggers
+    logging.getLogger("snowflake.connector").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
 def main() -> None:
@@ -42,6 +56,7 @@ def main() -> None:
         help="Create result tables in Snowflake (run once during setup).",
     )
     args = parser.parse_args()
+    _configure_logging()
 
     # ── One-time setup ────────────────────────────────────────────────────────
     if args.setup_tables:
