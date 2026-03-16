@@ -140,7 +140,7 @@ recon_ai/
 |---|---|---|
 | [src/tools/position_impact.py](src/tools/position_impact.py) | `_get_fx_rate()` | Real Snowflake FX rate lookup — config is wired in `field_mappings.yaml → fx_rates`, uncomment the SQL block once MARKET_DATA_DB is live |
 | [src/tools/position_impact.py](src/tools/position_impact.py) | `_get_last_price()` | Last known price lookup from Snowflake market data |
-| [src/tools/reporter.py](src/tools/reporter.py) | `finalise_recon_run()` | ~~SQL UPDATE uses `execute_ddl` but params not bound~~ — **Fixed in commit `ded257b`** |
+| `src/tools/data_loader.py` | `load_booked_trades()` / `load_executed_transactions()` | SFTP source mode (`source: sftp` in field_mappings.yaml) is configured but not implemented — only Snowflake path works |
 | [config/system_prompt.md](config/system_prompt.md) | Counterparty Aliases section | Fill in real counterparty alias mappings |
 | [config/system_prompt.md](config/system_prompt.md) | Known Data Quality Issues | Fill in broker-specific data quirks |
 | [config/field_mappings.yaml](config/field_mappings.yaml) | All `← REPLACE` lines | Real Snowflake DB/schema/table/column names |
