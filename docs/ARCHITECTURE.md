@@ -54,11 +54,13 @@
 │  RECON_DB.RESULTS.BREAKS              (breaks + AI explanations)   │
 │  RECON_DB.RESULTS.POSITION_IMPACT     (P&L, cash, risk)            │
 │                                                                     │
-│  RECON_DB.OBSERVABILITY.AI_API_CALLS  (Claude usage per call)      │
-│  RECON_DB.OBSERVABILITY.TOOL_CALLS    (tool invocations)           │
-│  RECON_DB.OBSERVABILITY.RUN_EVENTS    (lifecycle events)           │
-│  RECON_DB.OBSERVABILITY.USER_ACTIVITY (audit trail)                │
-│  RECON_DB.OBSERVABILITY.V_*           (5 raw SQL views)            │
+│  RECON_DB.OBSERVABILITY.AI_API_CALLS         (Claude usage per call)   │
+│  RECON_DB.OBSERVABILITY.TOOL_CALLS           (tool invocations)        │
+│  RECON_DB.OBSERVABILITY.RUN_EVENTS           (lifecycle events)        │
+│  RECON_DB.OBSERVABILITY.USER_ACTIVITY        (audit trail)             │
+│  RECON_DB.OBSERVABILITY.DATA_QUALITY_METRICS (data load health)        │
+│  RECON_DB.OBSERVABILITY.NOTIFICATION_DELIVERIES (alert dispatch log)   │
+│  RECON_DB.OBSERVABILITY.V_*                  (7 raw SQL views)         │
 └──────────────────────────────────────────────────────────────────────┘
            │
            ▼
@@ -186,8 +188,19 @@ If observability/ is deleted:  change 3 lines in reconciliation_agent.py
                                 — everything else continues to work
 ```
 
-All `ObservabilitySink` write methods catch exceptions silently and print a warning.
+All `ObservabilitySink` write methods catch exceptions silently and log a `WARNING`.
 The main recon job is never blocked or crashed by a tracking failure.
+
+Two additional observability streams are written by pipeline components directly
+(not via `TrackedAnthropic`):
+
+| Stream | Written by | When |
+|---|---|---|
+| `DATA_QUALITY_METRICS` | `data_loader._emit_data_quality()` | After every `load_booked_trades()` and `load_executed_transactions()` call — records row count, null rates, query latency, and outcome |
+| `NOTIFICATION_DELIVERIES` | `alert_router._record_delivery()` | After every `_dispatch()` call — records channel type, name, break count, status (`SUCCESS` / `FAILURE` / `SKIPPED`), and retry count |
+
+Both helpers use the same fire-and-forget pattern: lazy imports inside `try/except`,
+`logger.warning` on failure, never raises.
 
 ---
 
@@ -290,6 +303,45 @@ snowsql -d RECON_DB -f sql/migrations/001_add_enrichment_source_and_call_purpose
 
 ---
 
+## Typed Exception Hierarchy
+
+All pipeline exceptions extend `ReconBaseError` from `src/exceptions.py`.
+Callers can catch the specific subclass to distinguish retry-safe vs non-retry
+failures:
+
+| Exception | Raised by | Safe to retry? |
+|---|---|---|
+| `DataLoadError` | `data_loader.py` | Yes — transient Snowflake connection issue |
+| `DataQualityError` | `data_loader.py` | No — fix source data first |
+| `MatchingError` | `matcher.py` | Investigate — unexpected input shape |
+| `ClassificationError` | `break_classifier.py` | Investigate |
+| `EnrichmentError` | `reconciliation_agent.py` | Yes if API timeout; No if auth |
+| `ReportingError` | `reporter.py` | Yes — transient Snowflake write failure |
+| `AlertingError` | `alert_router.py` | Yes (retry built into notifiers) |
+| `ConfigValidationError` | `config_validator.py` | No — fix config first |
+
+---
+
+## Notification Retry Behaviour
+
+All three notification channels (Slack, email, Teams) retry on transient
+failures using exponential backoff with jitter:
+
+```
+src/notifications/retry.py
+
+retry_with_backoff(fn, attempts=3, base_delay=1.0, max_delay=30.0, jitter=0.5)
+  Attempt 1 → fails → wait 1.0–1.5 s
+  Attempt 2 → fails → wait 2.0–2.5 s
+  Attempt 3 → fails → log ERROR, re-raise
+```
+
+Callers raise `TransientError` for retryable failures (network, HTTP 429/5xx,
+SMTP connection drop). Non-transient failures (auth errors, bad recipients)
+propagate immediately without retrying.
+
+---
+
 ## Failure Modes and Recovery
 
 | Failure | Impact | Recovery |
@@ -297,9 +349,11 @@ snowsql -d RECON_DB -f sql/migrations/001_add_enrichment_source_and_call_purpose
 | Snowflake connection lost mid-run | Run marked FAILED in RECON_RUNS | Re-trigger for same date: `python main.py --date YYYY-MM-DD` |
 | Claude API error | Run marked FAILED | Check ANTHROPIC_API_KEY; re-trigger |
 | Partial tool failure | Claude logs error, continues where possible | Check Airflow logs; review RECON_RUNS.ERROR_MESSAGE |
-| Observability write fails | Warning printed, no impact on recon | Check SNOWFLAKE_RESULTS_DATABASE access |
-| Alert delivery fails | Warning printed, results still in Snowflake | Manually query RECON_DB.RESULTS.BREAKS |
+| Observability write fails | WARNING logged, no impact on recon | Check SNOWFLAKE_RESULTS_DATABASE access |
+| Alert delivery fails after retries | WARNING logged, FAILURE row in NOTIFICATION_DELIVERIES | Query `V_NOTIFICATION_DELIVERIES`; manually notify if needed |
 | Duplicate run for same date | Second run writes additional rows | Filter by max(RUN_TIMESTAMP) per TRADE_DATE in queries |
+| Config invalid at startup | Process exits with code 2 before any Snowflake connections | Fix reported config errors; re-trigger |
+| FX / price stubs in use | WARNING logged; P&L and notional may be inaccurate | Implement `_get_fx_rate()` and `_get_last_price()` in `position_impact.py` |
 
 ---
 

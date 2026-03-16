@@ -182,6 +182,72 @@ One row per break, showing forward impact on positions and valuations.
 
 ## Observability Tables
 
+### RECON_DB.OBSERVABILITY.DATA_QUALITY_METRICS
+
+One row per data-load attempt (trades or executions). Written by `_emit_data_quality()` in `data_loader.py` on every outcome: success, empty result, or failure.
+
+| Column | Type | Description |
+|---|---|---|
+| `METRIC_ID` | VARCHAR(64) PK | Unique metric record ID (UUID) |
+| `RUN_ID` | VARCHAR(64) | Associated reconciliation run ID (NULL if load fails before run is created) |
+| `TRADE_DATE` | VARCHAR(16) | Trade date being loaded (YYYY-MM-DD string) |
+| `DATASET` | VARCHAR(32) | `trades` or `executions` |
+| `RECORD_COUNT` | INTEGER | Number of rows returned by the Snowflake query (0 on EMPTY or FAILURE) |
+| `NULL_TRADE_ID` | INTEGER | Count of NULL values in the `trade_id` / `execution_id` column |
+| `NULL_ISIN` | INTEGER | Count of NULL values in the `isin` column |
+| `NULL_QUANTITY` | INTEGER | Count of NULL values in the `quantity` / `executed_quantity` column |
+| `NULL_PRICE` | INTEGER | Count of NULL values in the `price` / `executed_price` column |
+| `QUERY_LATENCY_MS` | INTEGER | Wall-clock milliseconds for the Snowflake query |
+| `STATUS` | VARCHAR(16) | `SUCCESS`, `EMPTY` (zero rows returned), or `FAILURE` (query exception) |
+| `ERROR_MESSAGE` | TEXT | Exception detail when STATUS = FAILURE |
+| `MEASURED_AT` | TIMESTAMP_NTZ | UTC timestamp when the metric was recorded |
+
+**Key query: Recent data quality by dataset**
+```sql
+SELECT
+    TRADE_DATE, DATASET, STATUS,
+    RECORD_COUNT, NULL_TRADE_ID, NULL_ISIN,
+    QUERY_LATENCY_MS
+FROM RECON_DB.OBSERVABILITY.DATA_QUALITY_METRICS
+WHERE MEASURED_AT >= DATEADD('day', -7, CURRENT_TIMESTAMP())
+ORDER BY MEASURED_AT DESC;
+```
+
+---
+
+### RECON_DB.OBSERVABILITY.NOTIFICATION_DELIVERIES
+
+One row per dispatch attempt per channel. Written by `_record_delivery()` in `alert_router.py` after every `_dispatch()` call.
+
+| Column | Type | Description |
+|---|---|---|
+| `DELIVERY_ID` | VARCHAR(64) PK | Unique delivery record ID (UUID) |
+| `RUN_ID` | VARCHAR(64) | Associated reconciliation run ID |
+| `TRADE_DATE` | VARCHAR(16) | Trade date of the run (YYYY-MM-DD string) |
+| `CHANNEL_TYPE` | VARCHAR(16) | `slack`, `email`, or `teams` |
+| `CHANNEL_NAME` | VARCHAR(256) | Slack channel name, email group alias, or Teams alias |
+| `BREAK_COUNT` | INTEGER | Number of breaks included in this notification |
+| `STATUS` | VARCHAR(16) | `SUCCESS`, `FAILURE`, or `SKIPPED` (channel not configured) |
+| `ATTEMPTS` | INTEGER | Number of delivery attempts made (1–3 with retry backoff) |
+| `ERROR_MESSAGE` | TEXT | Final error detail when STATUS = FAILURE |
+| `SENT_AT` | TIMESTAMP_NTZ | UTC timestamp of the delivery attempt |
+
+**Status values:**
+- `SUCCESS` — notification delivered to the channel
+- `FAILURE` — all retry attempts exhausted; error logged
+- `SKIPPED` — channel alias not present in `alert_routing.yaml` (expected for unconfigured channels)
+
+**Key query: Failed deliveries in last 7 days**
+```sql
+SELECT TRADE_DATE, CHANNEL_TYPE, CHANNEL_NAME, ATTEMPTS, ERROR_MESSAGE, SENT_AT
+FROM RECON_DB.OBSERVABILITY.NOTIFICATION_DELIVERIES
+WHERE STATUS = 'FAILURE'
+  AND SENT_AT >= DATEADD('day', -7, CURRENT_TIMESTAMP())
+ORDER BY SENT_AT DESC;
+```
+
+---
+
 ### RECON_DB.OBSERVABILITY.AI_API_CALLS
 
 One row per Claude API call. The primary table for cost monitoring.
@@ -297,6 +363,16 @@ Human-readable audit trail ordered by most recent.
 
 **Key columns:** `USER_NAME`, `ACTION`, `SOURCE`, `RUN_ID`, `TRADE_DATE`, `OCCURRED_AT`
 
+### V_DATA_QUALITY_TRENDS
+7-day rolling view of data load health per dataset. Use to detect recurring feed problems (e.g. a broker that consistently sends late confirms, or an OMS export with growing null rates).
+
+**Key columns:** `TRADE_DATE`, `DATASET`, `STATUS`, `RECORD_COUNT`, `NULL_TRADE_ID`, `NULL_ISIN`, `NULL_QUANTITY`, `NULL_PRICE`, `QUERY_LATENCY_MS`, `MEASURED_AT`
+
+### V_NOTIFICATION_DELIVERIES
+Notification delivery outcomes by run and channel. Use to monitor alert reliability and detect consistently failing channels.
+
+**Key columns:** `TRADE_DATE`, `RUN_ID`, `CHANNEL_TYPE`, `CHANNEL_NAME`, `STATUS`, `ATTEMPTS`, `BREAK_COUNT`, `ERROR_MESSAGE`, `SENT_AT`
+
 ---
 
 ## dbt Semantic Layer
@@ -390,3 +466,5 @@ Use dbt mart tables as the primary source. Raw views are available for ad-hoc qu
 | **Matched Trade Log** | `fct_matched_trades` | Exact vs composite match rates; settlement confirmation tracking |
 | **Tool Performance** | `V_TOOL_PERFORMANCE` (raw view) | Success rate, avg latency per pipeline step |
 | **Audit Trail** | `V_USER_ACTIVITY` (raw view) | Who triggered what, when |
+| **Data Quality** | `V_DATA_QUALITY_TRENDS` (raw view) | Record counts, null rates, query latency per dataset — detect feed problems early |
+| **Alert Delivery** | `V_NOTIFICATION_DELIVERIES` (raw view) | Delivery success rate by channel, failure details, retry counts |

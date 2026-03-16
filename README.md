@@ -214,8 +214,30 @@ All Claude API usage, tool calls, and run events are captured automatically in
 | `V_TOOL_PERFORMANCE` | Which tools Claude calls most, success rate, latency |
 | `V_RUN_HISTORY` | Every run with match rate, break counts, AI cost |
 | `V_USER_ACTIVITY` | Full audit trail of who triggered what |
+| `V_DATA_QUALITY_TRENDS` | Per-dataset record counts, null rates, query latency |
+| `V_NOTIFICATION_DELIVERIES` | Alert delivery success/failure per channel per run |
 
 See [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md) for full table and field reference.
+
+---
+
+## Testing
+
+Unit tests cover the matching engine, break classifier, break enricher, and alert router.
+They run without Snowflake connections, without a Claude API key, and complete in under 1 second.
+
+```bash
+pytest tests/unit/
+```
+
+84 tests across 4 modules:
+
+| Module | Tests | Covers |
+|---|---|---|
+| `test_matcher.py` | 20 | Price/qty/date tolerances, Pass-1 and Pass-2 matching, composite key normalisation |
+| `test_break_classifier.py` | 17 | Severity scoring, UNEXECUTED/orphan detection, summary structure |
+| `test_break_enricher.py` | 35 | All 7 break types, explanation content, action recommendations, `needs_human_review` logic |
+| `test_alert_router.py` | 12 | Channel dispatch, SKIPPED/FAILURE outcomes, observability fire-and-forget safety |
 
 ---
 
@@ -243,6 +265,7 @@ No other code changes needed.
 |---|---|---|
 | [CLAUDE.md](CLAUDE.md) | AI (auto-loaded) | Full project context for AI sessions |
 | [README.md](README.md) | All | Setup, usage, configuration reference |
+| [docs/CHANGELOG.md](docs/CHANGELOG.md) | Engineers | All reliability fixes — motivation, what changed, files, verification |
 | [docs/RELEASE.md](docs/RELEASE.md) | Engineers | Dev-to-prod deployment, environment isolation, rollback |
 | [docs/CONFIG_GUIDE.md](docs/CONFIG_GUIDE.md) | Ops / Analysts | All config fields explained with examples and common tasks |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Engineers | System design, data flow, design decisions |

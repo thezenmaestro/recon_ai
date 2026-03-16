@@ -201,6 +201,49 @@ WHERE TRADE_DATE = '2024-01-15'
 2. Check `config/system_prompt.md` counterparty aliases — missing aliases cause false COMPOSITE match failures
 3. Check `config/field_mappings.yaml` — wrong column mappings can cause systematic mismatches
 
+### "Alert was not received on Slack / email / Teams"
+
+The notification layer retries failed deliveries up to 3 times with exponential
+backoff before giving up. If all retries exhausted, a WARNING is logged:
+
+```
+WARNING src.notifications.slack_notifier — All 3 attempts failed for Slack #recon-ops: Connection timeout
+```
+
+**To check delivery outcomes:**
+```sql
+SELECT CHANNEL_TYPE, CHANNEL_NAME, STATUS, ATTEMPTS, ERROR_MESSAGE, SENT_AT
+FROM RECON_DB.OBSERVABILITY.NOTIFICATION_DELIVERIES
+WHERE STATUS = 'FAILURE'
+  AND SENT_AT >= DATEADD('hour', -24, CURRENT_TIMESTAMP())
+ORDER BY SENT_AT DESC;
+```
+
+`SKIPPED` rows are expected for channels not configured in `alert_routing.yaml`.
+Only `FAILURE` rows indicate a real delivery problem.
+
+Common causes of persistent failure:
+- Slack webhook URL rotated — update `config/alert_routing.yaml`
+- SMTP password changed — update `SMTP_PASSWORD` env var
+- Teams webhook expired — regenerate in Teams and update `alert_routing.yaml`
+
+### "Data quality WARNING in logs — P&L figures showing $0.00"
+
+Two stubs in `position_impact.py` are not yet implemented:
+- `_get_fx_rate()` — falls back to 1.0 for all currencies, logging a WARNING
+- `_get_last_price()` — returns None, logging a WARNING; P&L impact = $0.00
+
+These are known TODOs (see CLAUDE.md). The warnings indicate the stub is active,
+not a failure. Notional at risk is still calculated from booked price × quantity gap.
+
+To check data load quality (null rates, record counts):
+```sql
+SELECT DATASET, STATUS, RECORD_COUNT,
+       NULL_TRADE_ID, NULL_ISIN, QUERY_LATENCY_MS
+FROM RECON_DB.OBSERVABILITY.DATA_QUALITY_METRICS
+WHERE TRADE_DATE = CURRENT_DATE - 1;
+```
+
 ### "Break count is zero but I know there are breaks"
 
 1. Check filter in `config/field_mappings.yaml`:
@@ -251,4 +294,24 @@ ORDER BY 1 DESC;
 ```sql
 SELECT * FROM RECON_DB.OBSERVABILITY.V_MONTHLY_AI_COST
 WHERE MONTH = DATE_TRUNC('month', CURRENT_DATE);
+```
+
+### Alert delivery status for last run
+
+```sql
+SELECT CHANNEL_TYPE, CHANNEL_NAME, STATUS, ATTEMPTS, ERROR_MESSAGE, SENT_AT
+FROM RECON_DB.OBSERVABILITY.NOTIFICATION_DELIVERIES
+WHERE TRADE_DATE = CURRENT_DATE - 1
+ORDER BY SENT_AT;
+```
+
+### Data load health
+
+```sql
+SELECT DATASET, STATUS, RECORD_COUNT,
+       NULL_TRADE_ID, NULL_ISIN, NULL_QUANTITY, NULL_PRICE,
+       QUERY_LATENCY_MS, MEASURED_AT
+FROM RECON_DB.OBSERVABILITY.DATA_QUALITY_METRICS
+WHERE TRADE_DATE = CURRENT_DATE - 1
+ORDER BY MEASURED_AT;
 ```

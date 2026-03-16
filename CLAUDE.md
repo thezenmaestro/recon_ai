@@ -77,28 +77,46 @@ recon_ai/
 │   │   ├── models.py                # All Pydantic models: BookedTrade, BreakRecord, etc.
 │   │   └── snowflake_connector.py   # 3 connection context managers + DDL for result tables
 │   │
+│   ├── exceptions.py                # Typed exception hierarchy — DataLoadError,
+│   │                                # DataQualityError, EnrichmentError, etc.
+│   │                                # All extend ReconBaseError
+│   ├── config_validator.py          # Validates env vars + YAML config on startup
+│   │                                # Called from main.py before any connections open
+│   │                                # Exits with code 2 on failure, reports ALL issues at once
+│   │
 │   ├── notifications/
-│   │   ├── slack_notifier.py        # SLACK_WEBHOOK_URL env var
-│   │   ├── email_notifier.py        # SMTP_HOST/USER/PASSWORD env vars
-│   │   ├── teams_notifier.py        # Teams webhook URLs from alert_routing.yaml
+│   │   ├── retry.py                 # retry_with_backoff() + TransientError
+│   │   │                            # Used by all three notifiers for network/webhook retries
+│   │   ├── slack_notifier.py        # SLACK_WEBHOOK_URL env var; retries on 429/5xx
+│   │   ├── email_notifier.py        # SMTP_HOST/USER/PASSWORD env vars; retries on SMTP drops
+│   │   ├── teams_notifier.py        # Teams webhook URLs from alert_routing.yaml; retries
 │   │   └── alert_router.py          # Reads routing matrix, dispatches to all 3 channels
+│   │                                # _record_delivery() writes to OBSERVABILITY (fire-and-forget)
 │   │
 │   └── schemas/
 │       └── recon_output.py          # Pydantic schema for Claude's final ReconSummary
 │
 ├── observability/                 ← INDEPENDENT DATA CAPTURE LAYER
 │   ├── models.py                    # AIAPICallEvent, ToolCallEvent, RunEvent, UserActivityEvent
+│   │                                # DataQualityMetricEvent, NotificationDeliveryEvent
 │   ├── tracker.py                   # TrackedAnthropic — drop-in for anthropic.Anthropic()
 │   ├── sink.py                      # Snowflake writes to OBSERVABILITY schema + DDL + views
+│   │                                # 6 tables, 7 views
 │   └── setup.py                     # Run once: creates tables and views
 │
 ├── airflow/
 │   └── dags/recon_dag.py            # DAG: validate_snowflake_connections → run_reconciliation
 │
 ├── tests/
-│   ├── unit/                        # Test tools/ independently (no Snowflake, no AI)
+│   ├── conftest.py                  # sys.path setup for test imports
+│   ├── unit/                        # 84 tests — no Snowflake, no AI key required
+│   │   ├── test_matcher.py          # 20 tests: tolerances, pass-1, pass-2, composite key
+│   │   ├── test_break_classifier.py # 17 tests: severity, orphan, summary structure
+│   │   ├── test_break_enricher.py   # 35 tests: all 7 break types, explain/recommend
+│   │   └── test_alert_router.py     # 12 tests: dispatch, SKIPPED, FAILURE, observability safety
 │   └── integration/                 # Full pipeline tests
 │
+├── pytest.ini                       # Test discovery config (testpaths = tests)
 ├── main.py                          # CLI: python main.py --date YYYY-MM-DD
 └── .env.example                     # Template — copy to .env, never commit .env
 ```
@@ -111,7 +129,7 @@ recon_ai/
 2. **`observability/` has zero imports from `src/`** — it is fully independent
 3. **`src/` imports from `observability/` in exactly ONE place** — `reconciliation_agent.py` line: `client = TrackedAnthropic(...)`
 4. **Config files are the single source of truth** — never hardcode table names, tolerances, or channel IDs in Python
-5. **Observability never crashes the main job** — all sink writes are wrapped in try/except and print warnings
+5. **Observability never crashes the main job** — all sink writes are wrapped in try/except and log WARNING (never raises)
 6. **Pipeline is hard-coded Python** — `reconciliation_agent.py` calls `src/tools/` functions directly in fixed order; Claude is NOT the orchestrator
 
 ---
@@ -122,7 +140,7 @@ recon_ai/
 |---|---|---|
 | [src/tools/position_impact.py](src/tools/position_impact.py) | `_get_fx_rate()` | Real Snowflake FX rate lookup — config is wired in `field_mappings.yaml → fx_rates`, uncomment the SQL block once MARKET_DATA_DB is live |
 | [src/tools/position_impact.py](src/tools/position_impact.py) | `_get_last_price()` | Last known price lookup from Snowflake market data |
-| [src/tools/reporter.py](src/tools/reporter.py) | `finalise_recon_run()` | SQL UPDATE uses `execute_ddl` but params not bound — fix to use parameterised UPDATE |
+| [src/tools/reporter.py](src/tools/reporter.py) | `finalise_recon_run()` | ~~SQL UPDATE uses `execute_ddl` but params not bound~~ — **Fixed in commit `ded257b`** |
 | [config/system_prompt.md](config/system_prompt.md) | Counterparty Aliases section | Fill in real counterparty alias mappings |
 | [config/system_prompt.md](config/system_prompt.md) | Known Data Quality Issues | Fill in broker-specific data quirks |
 | [config/field_mappings.yaml](config/field_mappings.yaml) | All `← REPLACE` lines | Real Snowflake DB/schema/table/column names |
@@ -167,15 +185,19 @@ RECON_DB
   ├── RESULTS.MATCHED_TRADES              ← Confirmed matched pairs
   ├── RESULTS.BREAKS                      ← All break records + AI explanations
   ├── RESULTS.POSITION_IMPACT             ← Forward P&L, cash, risk impact
-  └── OBSERVABILITY.AI_API_CALLS          ← Claude API usage per call
-      OBSERVABILITY.TOOL_CALLS            ← Tool invocations
-      OBSERVABILITY.RUN_EVENTS            ← Run lifecycle events
-      OBSERVABILITY.USER_ACTIVITY         ← Who did what
-      OBSERVABILITY.V_DAILY_AI_COST       ← View: daily cost by model
-      OBSERVABILITY.V_MONTHLY_AI_COST     ← View: monthly cost rollup
-      OBSERVABILITY.V_TOOL_PERFORMANCE    ← View: tool stats
-      OBSERVABILITY.V_RUN_HISTORY         ← View: run history + cost
-      OBSERVABILITY.V_USER_ACTIVITY       ← View: audit trail
+  └── OBSERVABILITY.AI_API_CALLS             ← Claude API usage per call
+      OBSERVABILITY.TOOL_CALLS               ← Tool invocations
+      OBSERVABILITY.RUN_EVENTS               ← Run lifecycle events
+      OBSERVABILITY.USER_ACTIVITY            ← Who did what
+      OBSERVABILITY.DATA_QUALITY_METRICS     ← Data load health (nulls, counts, latency)
+      OBSERVABILITY.NOTIFICATION_DELIVERIES  ← Alert dispatch outcomes per channel
+      OBSERVABILITY.V_DAILY_AI_COST          ← View: daily cost by model
+      OBSERVABILITY.V_MONTHLY_AI_COST        ← View: monthly cost rollup
+      OBSERVABILITY.V_TOOL_PERFORMANCE       ← View: tool stats
+      OBSERVABILITY.V_RUN_HISTORY            ← View: run history + cost
+      OBSERVABILITY.V_USER_ACTIVITY          ← View: audit trail
+      OBSERVABILITY.V_DATA_QUALITY_TRENDS    ← View: 7-day data load health
+      OBSERVABILITY.V_NOTIFICATION_DELIVERIES← View: alert delivery outcomes
 ```
 
 ---
