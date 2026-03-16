@@ -172,8 +172,8 @@ def _check_alert_routing() -> list[str]:
     if not path.exists():
         return [f"config/alert_routing.yaml not found at {path}"]
     try:
-        with open(path, encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        raw = path.read_text(encoding="utf-8")
+        data = yaml.safe_load(raw)
     except yaml.YAMLError as e:
         return [f"config/alert_routing.yaml is not valid YAML: {e}"]
 
@@ -182,6 +182,19 @@ def _check_alert_routing() -> list[str]:
         errors.append("alert_routing.yaml: 'routing_matrix' key is missing")
     if "channels" not in data:
         errors.append("alert_routing.yaml: 'channels' key is missing")
+
+    # Detect template placeholders that have not been replaced
+    placeholder_lines = [
+        i + 1
+        for i, line in enumerate(raw.splitlines())
+        if "← REPLACE" in line
+    ]
+    if placeholder_lines:
+        errors.append(
+            f"alert_routing.yaml: {len(placeholder_lines)} placeholder value(s) still contain "
+            f"'← REPLACE' (lines {placeholder_lines}). "
+            "Replace each value with your real Slack channel, email address, or Teams webhook URL."
+        )
 
     return errors
 
